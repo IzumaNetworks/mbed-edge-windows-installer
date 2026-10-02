@@ -204,13 +204,23 @@ of identity replacement. These staging checks do not qualify production cloud
 enrollment.
 
 
-For the extracted repository and file-provisioning changes, native setup builds,
-12 credential-free input checks, 6 combined-bundle integrity checks and 7 package
-integrity checks passed on October 2, 2026. Current evidence is under this
+The extracted repository and first-file provisioning changes passed
+qualification on Windows 10 Pro 22H2 x64 (19045.6466) on October 2, 2026.
+Native setup builds, 12 credential-free input checks, 6 combined-bundle integrity
+checks and 7 package integrity checks passed. Evidence is under this
 repository's build/provisioning-input-1, build/bundle-qualification-final and
-build/package-qualification-final. The service/provisioning qualification is
-prepared in test-release.ps1 but has not run: Windows cancelled the UAC prompt
-before any temporary service was created. Run it with the matching
-build/setup-v2-0.21.1005/installer-result.json and
-build/setup-v2-0.21.1006/installer-result.json, and a new output directory.
+build/package-qualification-final.
+
+The administrator run of test-release.ps1 passed all 23 provisioning checks
+and 25 installer lifecycle checks against setup versions 0.21.1005 and
+0.21.1006. Evidence is in build/release-qualification-1/results.json and its
+provisioning and installer subdirectories. This includes protected CBOR and
+JSON/DER/RoT staging, deferred first provisioning, prevention of identity
+replacement, optional monitor installation, service-control permissions,
+upgrade, activated-core rollback, downgrade rejection and uninstall.
+The temporary service and monitor policy were removed; credential-free fixture
+data is retained. The existing EdgeCore service kept its original
+process/configuration and remained connected. The provisioning fixtures were
+never started and do not qualify production cloud enrollment.
+
 The unsigned ordinary installer is under build/izuma-edge-0.21.1006.

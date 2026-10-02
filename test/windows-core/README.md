@@ -52,9 +52,16 @@ and a new `-OutputDirectory`. No real credentials or cloud device creation are
 used by that run.
 
 
-Current extraction/file-provisioning validation on Windows 10 Pro:
-18 installer PowerShell scripts parse; the native x64 setup builds; all 12
-test-provisioning-input.ps1 checks, 6 combined-bundle checks and 7 package
-checks passed. The test-release.ps1 service checks are prepared and awaiting a
-successful Windows administrator prompt. The attempted prompt was cancelled
-before service registration. No production cloud enrollment is claimed.
+Current extraction/file-provisioning validation passed on Windows 10 Pro
+22H2 x64 (19045.6466) on October 2, 2026. All 18 installer PowerShell scripts
+parse and the native x64 setup builds. The 12 provisioning-input checks,
+6 combined-bundle checks and 7 package checks passed.
+
+The administrator run of test-release.ps1 passed all 23 provisioning checks
+and 25 installer lifecycle checks using setup versions 0.21.1005 and 0.21.1006.
+Evidence is in build/release-qualification-1/results.json and its provisioning
+and installer subdirectories. The temporary service and monitor policy were
+removed. The existing EdgeCore service retained its process/configuration and
+remained connected. Credential-free fixture data is intentionally retained.
+These results qualify file staging and deployment; production cloud enrollment
+still requires real production credentials and a separate test.

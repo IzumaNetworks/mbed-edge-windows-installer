@@ -53,9 +53,9 @@ enrollment and Windows hardware-backed key support.
 
 | Phase | Flow | Windows implementation/qualification |
 | --- | --- | --- |
-| 1 | Developer CBOR/JSON | Runtime importer and developer cloud connectivity tested; setup stages the external bundle. |
+| 1 | Developer CBOR/JSON | Runtime importer and developer cloud connectivity tested; protected setup staging passed credential-free fixture qualification. |
 | 1 | Production per-machine CBOR/JSON | Same importer and protected setup staging; real production FCU output, CA trust, enrollment/claiming and cloud bootstrap still require qualification. |
-| 1 | Software install, provision later | Manual startup until an administrator/SYSTEM supplies the first bundle with `provision-service.ps1`; then delayed automatic startup. |
+| 1 | Software install, provision later | Manual startup until an administrator/SYSTEM supplies the first bundle with `provision-service.ps1`; then delayed automatic startup. First-provisioning activation and identity-replacement rejection passed fixture qualification. |
 | 2 | FCU/FCC/PEP factory-server enrollment | Port the factory client/transport and enrollment orchestration to native Windows; retain offline/local-factory operation and later cloud bootstrap. |
 | 3 | Device-generated keys/TPM | Implement Windows TPM integration through appropriate platform/HAL interfaces; integrate CSR issuance, cloud key renewal and factory enrollment. Linux Parsec support is not Windows support. |
 
