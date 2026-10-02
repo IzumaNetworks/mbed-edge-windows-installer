@@ -1,0 +1,15 @@
+/build/
+*.exe
+*.dll
+*.zip
+*.log
+*.cbor
+*.der
+*.pem
+*.key
+*.pfx
+*.p12
+*.bin
+mbed_cloud_dev_credentials.c
+update_default_resources.c
+provisioning*.json
