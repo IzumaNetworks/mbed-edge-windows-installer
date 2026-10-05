@@ -49,7 +49,7 @@ function Restore-Previous {
     }
     if ($Transaction.wasRunning) {
         Start-Service $ServiceName
-        Wait-EdgeServiceReady $ServiceName $Transaction.oldCommand $Transaction.httpPort
+        Wait-EdgeServiceReady $ServiceName $Transaction.oldCommand $Transaction.httpPort -AllowLegacyHttp
     }
     $Transaction.stage='RolledBack'
     Write-Journal $Transaction
@@ -115,8 +115,9 @@ try {
         oldInstallation=($installation | ConvertTo-Json | ConvertFrom-Json); oldRelease=$currentRelease}
     $expectedIdentity=$null
     if ($RequireCloud) {
-        if (-not $transaction.wasRunning -or $transaction.httpPort -eq 0) { throw 'Cloud qualification needs a running client with an HTTP status port.' }
-        $status=Invoke-RestMethod -Uri "http://127.0.0.1:$($transaction.httpPort)/status" -TimeoutSec 3
+        if (-not $transaction.wasRunning) { throw 'Cloud qualification needs a running client.' }
+        try { $status=Read-EdgeStatus $ServiceName }
+        catch { $status=Read-LegacyEdgeHttpStatus $ServiceName $transaction.httpPort }
         if ($status.status -ne 'connected') { throw 'Cloud qualification needs an initially connected client.' }
         $expectedIdentity=$status.'internal-id'
     }
@@ -133,7 +134,7 @@ try {
         if ($RequireCloud) {
             $deadline=[DateTime]::UtcNow.AddSeconds(150)
             do {
-                $status=Invoke-RestMethod -Uri "http://127.0.0.1:$($transaction.httpPort)/status" -TimeoutSec 3
+                $status=Read-EdgeStatus $ServiceName
                 if ($status.status -eq 'connected') { break }
                 Start-Sleep -Seconds 1
             } while ([DateTime]::UtcNow -lt $deadline)

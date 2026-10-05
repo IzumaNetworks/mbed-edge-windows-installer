@@ -9,6 +9,7 @@ param(
     [string]$ProvisioningFile,
     [ValidateSet('developer','production')][string]$ProvisioningMode='developer',
     [ValidateRange(0,65535)][int]$HttpPort=8080,
+    [switch]$EnableTcpStatus,
     [ValidateRange(1,65535)][int]$ProtocolPort=7681,
     [switch]$Start,
     [switch]$AllowUnsigned,
@@ -39,6 +40,7 @@ if (-not $runtime -or -not $runtime.Installed -or [version]$runtime.Version.Trim
 }
 $arguments=@{BinaryDirectory=(Join-Path $PackageDirectory 'bin'); ServiceName=$ServiceName;
     InstallDirectory=$release; DataDirectory=$data; HttpPort=$HttpPort; ProtocolPort=$ProtocolPort; Start=$Start}
+if ($EnableTcpStatus) { $arguments.EnableTcpStatus=$true }
 if ($ProvisioningFile) { $arguments.ProvisioningFile=$ProvisioningFile; $arguments.ProvisioningMode=$ProvisioningMode }
 & (Join-Path $PSScriptRoot 'install-service.ps1') @arguments
 @{schema=1; version=$manifest.version; directory=$release; previousDirectory=$null} |

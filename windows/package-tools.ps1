@@ -103,16 +103,121 @@ function Protect-EdgeRelease {
     }
     Set-Acl -LiteralPath $Directory -AclObject $acl
 }
+function Initialize-EdgeStatusPipeClient {
+    if ('Izuma.EdgeStatusPipeClient' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+namespace Izuma {
+    public static class EdgeStatusPipeClient {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern SafeFileHandle CreateFile(string name, uint access, uint share,
+            IntPtr security, uint creation, uint flags, IntPtr templateFile);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetNamedPipeServerProcessId(SafeFileHandle pipe, out uint processId);
+        private const uint ClientAccess = (0x00120089u | 0x00120116u) & ~0x00000004u;
+        private static int Remaining(DateTime deadline) {
+            int milliseconds = (int)Math.Ceiling((deadline - DateTime.UtcNow).TotalMilliseconds);
+            if (milliseconds <= 0) throw new TimeoutException("Status pipe operation timed out.");
+            return milliseconds;
+        }
+        private static void ReadExact(FileStream stream, byte[] data, DateTime deadline) {
+            int offset = 0;
+            while (offset < data.Length) {
+                IAsyncResult operation = stream.BeginRead(data, offset, data.Length - offset, null, null);
+                if (!operation.AsyncWaitHandle.WaitOne(Remaining(deadline))) {
+                    stream.Dispose();
+                    throw new TimeoutException("Status pipe read timed out.");
+                }
+                int amount = stream.EndRead(operation);
+                if (amount == 0) throw new EndOfStreamException();
+                offset += amount;
+            }
+        }
+        public static string Read(uint expectedPid) {
+            DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+            using (SafeFileHandle handle = CreateFile(@"\\.\pipe\IzumaEdgeCoreStatus",
+                ClientAccess, 0, IntPtr.Zero, 3, 0x40000000u, IntPtr.Zero)) {
+                if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                uint serverPid;
+                if (!GetNamedPipeServerProcessId(handle, out serverPid) || serverPid != expectedPid)
+                    throw new UnauthorizedAccessException("Status pipe server is not the EdgeCore service.");
+                using (var stream = new FileStream(handle, FileAccess.ReadWrite, 4096, true)) {
+                    byte[] header = new byte[4];
+                    ReadExact(stream, header, deadline);
+                    uint length = ((uint)header[0] << 24) | ((uint)header[1] << 16) |
+                        ((uint)header[2] << 8) | header[3];
+                    if (length == 0 || length > 65536) throw new InvalidDataException("Status response length is invalid.");
+                    byte[] payload = new byte[(int)length];
+                    ReadExact(stream, payload, deadline);
+                    IAsyncResult ack = stream.BeginWrite(new byte[] { 6 }, 0, 1, null, null);
+                    if (!ack.AsyncWaitHandle.WaitOne(Remaining(deadline))) {
+                        stream.Dispose();
+                        throw new TimeoutException("Status pipe acknowledgement timed out.");
+                    }
+                    stream.EndWrite(ack);
+                    return new UTF8Encoding(false, true).GetString(payload);
+                }
+            }
+        }
+    }
+}
+'@
+}
+function Read-EdgeStatus {
+    param([string]$ServiceName='EdgeCore')
+    $before=Get-EdgeServiceInfo $ServiceName
+    if (-not $before -or $before.State -ne 'Running' -or -not $before.ProcessId) { throw 'EdgeCore service is not running.' }
+    Initialize-EdgeStatusPipeClient
+    $status=[Izuma.EdgeStatusPipeClient]::Read([uint32]$before.ProcessId) | ConvertFrom-Json
+    $after=Get-EdgeServiceInfo $ServiceName
+    if (-not $after -or $after.State -ne 'Running' -or $after.ProcessId -ne $before.ProcessId -or
+        $status.connectivity.processId -ne $before.ProcessId) { throw 'Status pipe process identity mismatch.' }
+    return $status
+}
+function Read-LegacyEdgeHttpStatus {
+    param([string]$ServiceName='EdgeCore',[int]$HttpPort)
+    if ($HttpPort -lt 1 -or $HttpPort -gt 65535) { throw 'Legacy HTTP status port is unavailable.' }
+    $before=Get-EdgeServiceInfo $ServiceName
+    if (-not $before -or $before.State -ne 'Running' -or -not $before.ProcessId) { throw 'EdgeCore service is not running.' }
+    $owner=Get-NetTCPConnection -LocalPort $HttpPort -State Listen -ErrorAction Stop |
+        Where-Object { $_.LocalAddress -eq '127.0.0.1' -and $_.OwningProcess -eq $before.ProcessId }
+    if (-not $owner) { throw 'Legacy HTTP status port is not owned by the EdgeCore service.' }
+    $status=Invoke-RestMethod -Uri "http://127.0.0.1:$HttpPort/status" -TimeoutSec 3
+    # Older releases have no connectivity/PID metadata. Read optional members
+    # explicitly so the updater's StrictMode does not reject those responses.
+    $reportedPid=$null
+    $connectivityProperty=$status.PSObject.Properties['connectivity']
+    if ($connectivityProperty -and $connectivityProperty.Value) {
+        $pidProperty=$connectivityProperty.Value.PSObject.Properties['processId']
+        if ($pidProperty) { $reportedPid=$pidProperty.Value }
+    }
+    $after=Get-EdgeServiceInfo $ServiceName
+    $owner=Get-NetTCPConnection -LocalPort $HttpPort -State Listen -ErrorAction Stop |
+        Where-Object { $_.LocalAddress -eq '127.0.0.1' -and $_.OwningProcess -eq $before.ProcessId }
+    if (-not $after -or $after.State -ne 'Running' -or $after.ProcessId -ne $before.ProcessId -or -not $owner -or
+        ($reportedPid -and $reportedPid -ne $before.ProcessId)) {
+        throw 'Legacy HTTP status process identity mismatch.'
+    }
+    return $status
+}
 function Wait-EdgeServiceReady {
-    param([string]$Name,[string]$Command,[int]$HttpPort,[int]$Seconds=40)
+    param([string]$Name,[string]$Command,[int]$HttpPort,[int]$Seconds=40,[switch]$AllowLegacyHttp)
     $deadline=[DateTime]::UtcNow.AddSeconds($Seconds)
     do {
         $service=Get-EdgeServiceInfo $Name
         if ($service.PathName -ne $Command) { throw 'Service command changed during activation.' }
         if ($service.State -eq 'Stopped') { throw "Candidate service stopped: $($service.ExitCode)/$($service.ServiceSpecificExitCode)." }
         if ($service.State -eq 'Running') {
-            if ($HttpPort -eq 0) { return }
-            try { [void](Invoke-RestMethod -Uri "http://127.0.0.1:$HttpPort/status" -TimeoutSec 2); return } catch { }
+            try { [void](Read-EdgeStatus $Name); return } catch { }
+            if ($AllowLegacyHttp) {
+                try { [void](Read-LegacyEdgeHttpStatus $Name $HttpPort); return } catch { }
+            }
         }
         Start-Sleep -Milliseconds 250
     } while ([DateTime]::UtcNow -lt $deadline)

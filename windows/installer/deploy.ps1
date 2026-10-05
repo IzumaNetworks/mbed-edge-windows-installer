@@ -187,7 +187,6 @@ if ($service) {
     if (-not $http.Success) { throw 'Existing service has no local status port setting.' }
     $request.httpPort=[int]$http.Groups[1].Value
 }
-if ($request.installMonitor -and [int]$request.httpPort -eq 0) { throw 'Installing the monitor requires the local HTTP status endpoint.' }
 if ($coreAction -eq 'Install' -and $request.startService -and -not $request.provisioningFile -and -not (Test-Path -LiteralPath (Join-Path $data 'state'))) { throw 'Supply provisioning or select factory installation without starting the service.' }
 Protect-SetupDirectory $app
 Save-Json $ownerPath @{schema=1;serviceName=$name;appRoot=$app}

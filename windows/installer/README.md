@@ -113,8 +113,15 @@ command as administrator or SYSTEM:
   -ProvisioningFile D:\factory\machine-000123.cbor -ProvisioningMode production
 # For developer credentials, use -ProvisioningMode developer instead.
 Start-Service EdgeCore
-Invoke-RestMethod http://127.0.0.1:8080/status
+Get-Service EdgeCore
 ```
+
+The Edge Core Monitor reads local status through the Windows named pipe.
+The TCP `/status` endpoint is disabled by default. For a scripted new install,
+pass `-EnableTcpStatus` to `install-package.ps1`; this writes a protected runtime
+JSON with `"status": {"tcpEnabled": true}`. An installed service can opt in by
+adding the same setting to its protected runtime JSON and using `--config`.
+Installer readiness and cloud qualification also use the status pipe.
 
 This command requires a stopped, owned service and empty private state. It
 refuses existing CBOR/JSON arguments, any import journal, and any retained state,

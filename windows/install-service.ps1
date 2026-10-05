@@ -10,6 +10,7 @@ param(
     [string]$ProvisioningFile,
     [ValidateSet('developer','production')][string]$ProvisioningMode='developer',
     [ValidateRange(0,65535)][int]$HttpPort = 8080,
+    [switch]$EnableTcpStatus,
     [ValidateRange(1,65535)][int]$ProtocolPort = 7681,
     [ValidateSet('Automatic','Manual')][string]$StartupType = 'Automatic',
     [switch]$Start
@@ -83,6 +84,9 @@ if ($Action -eq 'Uninstall') {
             $registered.PathName -notmatch 'edge-core\.exe"?\s+--service\s') {
             throw 'Refusing to remove a service that was not configured as native Edge Core.'
         }
+        # A restart queued after an earlier failed upgrade can outlive a clean
+        # manual stop. Disable this owned service before stopping/removing it.
+        Invoke-ServiceControl -Arguments @('config',$ServiceName,'start=','disabled')
         if ($existing.Status -ne 'Stopped') {
             $existing.Stop()
             $existing.WaitForStatus([ServiceProcess.ServiceControllerStatus]::Stopped, [TimeSpan]::FromSeconds(30))
@@ -144,6 +148,9 @@ try {
     $arguments = @((Quote-ServiceArgument $exe), '--service', '--service-name', $ServiceName,
         '--data-dir', (Quote-ServiceArgument $state), '--service-log', (Quote-ServiceArgument (Join-Path $logs 'edge-core.log')),
         '--bind', '127.0.0.1', '--http-port', "$HttpPort", '--edge-pt-address', "127.0.0.1:$ProtocolPort")
+    if ($EnableTcpStatus) {
+        $arguments += @('--config',(Quote-ServiceArgument (Join-Path $config 'status-runtime.json')))
+    }
     if ($inputBundle) {
         $provisionDirectory=Join-Path $config ('bundle-'+[guid]::NewGuid().ToString('D'))
         $provisionTarget=Join-Path $provisionDirectory ('provisioning'+$inputBundle.extension)
@@ -171,6 +178,10 @@ try {
     Set-ServiceDirectoryAcl $install $sid ReadAndExecute
     Set-ServiceDirectoryAcl $data $sid ReadAndExecute
     Set-ServiceDirectoryAcl $config $sid ReadAndExecute
+    if ($EnableTcpStatus) {
+        @{schemaVersion=1; status=@{tcpEnabled=$true}} | ConvertTo-Json -Depth 3 |
+            Set-Content -LiteralPath (Join-Path $config 'status-runtime.json') -Encoding UTF8
+    }
     Set-ServiceDirectoryAcl $state $sid Modify
     Set-ServiceDirectoryAcl $logs $sid Modify
     @{serviceName=$ServiceName; installDirectory=$install; schemaVersion=1} |
