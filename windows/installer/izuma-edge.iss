@@ -39,7 +39,7 @@ Name: service; Description: "Edge Core service only"
 Name: custom; Description: "Custom installation"; Flags: iscustom
 
 [Components]
-Name: core; Description: "Edge Core Windows service (required)"; Types: full service custom; Flags: fixed
+Name: core; Description: "Edge Core Windows service and command-line control (required)"; Types: full service custom; Flags: fixed
 Name: monitor; Description: "Edge Core Monitor (optional tray icon)"; Types: full
 
 [Files]
@@ -52,6 +52,7 @@ Source: "{#Bundle}\monitor\LICENSE"; DestDir: "{app}\licenses"; DestName: "monit
 ; These directories contain installer-owned executable assets only. Private
 ; provisioning/state/logs and the core releases are outside {app} and retained.
 Type: filesandordirs; Name: "{app}\monitor"
+Type: filesandordirs; Name: "{app}\ctl"
 Type: dirifempty; Name: "{app}\scripts"
 Type: files; Name: "{app}\deployment.json"
 Type: files; Name: "{app}\deployment-transaction.json"

@@ -13,7 +13,7 @@ function Case-Copy { param([string]$Name); $directory=Join-Path $out $Name; Copy
 function Rejected { param([string]$Path,[string]$Text); $failed=$false; try { [void](Test-EdgeInstallerBundle $Path -AllowUnsigned) } catch { $failed=$true }; if (-not $failed) { throw $Text }; $result.checks+=$Text }
 try {
     [void](Test-EdgeInstallerBundle $source -AllowUnsigned)
-    $result.checks+='Intact native x64 core/monitor bundle accepted for qualification'
+    $result.checks+='Intact native x64 core/monitor/control bundle accepted for qualification'
     $failed=$false; try { [void](Test-EdgeInstallerBundle $source) } catch { $failed=$true }
     if (-not $failed) { throw 'Unsigned production bundle accepted.' }
     $result.checks+='Unsigned production deployment rejected'
@@ -21,6 +21,13 @@ try {
     $file=Join-Path $directory 'monitor/edge-core-monitor.exe'
     $bytes=[IO.File]::ReadAllBytes($file); $bytes[$bytes.Length-1]=$bytes[$bytes.Length-1] -bxor 1; [IO.File]::WriteAllBytes($file,$bytes)
     Rejected $directory 'Modified privileged monitor helper rejected'
+    $directory=Case-Copy 'control-tamper'
+    $file=Join-Path $directory 'ctl/izuma-edge-ctl.exe'
+    $bytes=[IO.File]::ReadAllBytes($file); $bytes[$bytes.Length-1]=$bytes[$bytes.Length-1] -bxor 1; [IO.File]::WriteAllBytes($file,$bytes)
+    Rejected $directory 'Modified command-line control helper rejected'
+    $directory=Case-Copy 'control-missing'
+    Remove-Item -LiteralPath (Join-Path $directory 'ctl/izuma-edge-ctl.exe')
+    Rejected $directory 'Missing required command-line control helper rejected'
     $directory=Case-Copy 'policy-tamper'
     Add-Content -LiteralPath (Join-Path $directory 'monitor/set-service-control-policy.ps1') -Value '# modified'
     Rejected $directory 'Modified service-control policy helper rejected'

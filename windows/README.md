@@ -3,6 +3,8 @@
 For the combined service and optional tray monitor setup EXE, see the
 [Izuma Edge installer guide](installer/README.md). The monitor is selected by
 default and can be omitted with `/INSTALLMONITOR=0` during silent deployment.
+The setup always installs the native `izuma-edge-ctl` console helper for
+`start`, `stop`, `status` and `status --json`, including headless deployments.
 
 The current deployment bundle contains native Win32 x64 `edge-core.exe`, shared
 OpenSSL 3 DLLs, libevent DLLs, Windows PowerShell 5.1 installation/upgrade tools,

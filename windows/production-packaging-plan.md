@@ -10,6 +10,10 @@ The native x64 setup EXE is implemented by `build-installer.ps1` and
 `installer/izuma-edge.iss`; see the [deployment guide](installer/README.md).
 The first delivery uses Inno Setup with `/VERYSILENT` for management deployment.
 MSI authoring remains a possible later delivery format.
+Both setup EXE and future MSI delivery must include the native `izuma-edge-ctl`
+console helper as a required core component, independent of monitor selection.
+Its source is in `edge-core-monitor/ctl`; the existing setup installs it and
+manages its protected versioned directory and machine PATH entry.
 
 Installer behavior:
 

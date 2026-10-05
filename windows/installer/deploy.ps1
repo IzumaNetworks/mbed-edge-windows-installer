@@ -6,6 +6,7 @@ $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'bundle-tools.ps1')
 . (Join-Path $PSScriptRoot 'service-tools.ps1')
+. (Join-Path $PSScriptRoot 'ctl-integration.ps1')
 Assert-EdgeAdministrator
 $request=Get-Content -LiteralPath $RequestFile -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($Action) { $request.action=$Action }
@@ -107,6 +108,9 @@ function Rollback-Deployment {
         }
     }
     Restore-Policy $Transaction
+    $oldCtl=''
+    if ($Transaction.oldDeployment -and $Transaction.oldDeployment.PSObject.Properties.Name -contains 'ctlDirectory') { $oldCtl=$Transaction.oldDeployment.ctlDirectory }
+    Set-EdgeCtlIntegration $app $oldCtl
     if ($Transaction.oldDeployment) {
         $oldPort=8080
         if ($Transaction.oldDeployment.PSObject.Properties.Name -contains 'monitorHttpPort') { $oldPort=[int]$Transaction.oldDeployment.monitorHttpPort }
@@ -125,6 +129,7 @@ if ($request.action -ne 'Apply') {
         # The native helper verifies the SCM command before stopping/removing it.
         [void](Run-Helper (Join-Path $PSScriptRoot 'install-service.ps1') @('-Action','Uninstall','-ServiceName',$name))
         Set-Integration '' $false
+        Set-EdgeCtlIntegration $app ''
         $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
         try { $base.DeleteSubKey($policyPath,$false) } finally { $base.Dispose() }
         # Service state/config/logs and core releases are deliberately retained.
@@ -215,6 +220,15 @@ try {
             if (Test-Path -LiteralPath $candidate) { $candidate+='-attempt-'+[guid]::NewGuid().ToString('D') }
             $reboot=Run-Helper (Join-Path $PSScriptRoot 'update-service.ps1') (@('-ServiceName',$name,'-PackageDirectory',(Join-Path $bundle 'core'),'-ReleaseDirectory',$candidate)+$trust)
         }
+        Protect-SetupDirectory (Join-Path $app 'ctl')
+        $ctlDir=Join-Path $app ('ctl/'+$manifest.version)
+        Protect-SetupDirectory $ctlDir
+        $ctlExe=Join-Path $ctlDir 'izuma-edge-ctl.exe'
+        if (Test-Path -LiteralPath $ctlExe) {
+            Protect-SetupFile $ctlExe
+            if ((Get-FileHash -LiteralPath $ctlExe -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath (Join-Path $bundle 'ctl/izuma-edge-ctl.exe')).Hash) { throw 'Existing command-line release differs.' }
+        } else { Copy-Item -LiteralPath (Join-Path $bundle 'ctl/izuma-edge-ctl.exe') -Destination $ctlExe }
+        Protect-SetupFile $ctlExe
         $monitorExe=''
         if ($request.installMonitor) {
             Protect-SetupDirectory (Join-Path $app 'monitor')
@@ -230,8 +244,9 @@ try {
         $mode='AdministratorsOnly'; if ($request.installMonitor -and $request.monitorUserControl) { $mode='AllLocalUsers' }
         [void](Run-Helper (Join-Path $bundle 'monitor/set-service-control-policy.ps1') @('-Mode',$mode,'-ServiceName',$name))
         Set-Integration $monitorExe ([bool]($request.installMonitor -and $request.monitorStartup)) ([int]$request.httpPort)
+        Set-EdgeCtlIntegration $app $ctlDir
         $deployment=@{schema=1; serviceName=$name; appRoot=$app; installRoot=$install; dataDirectory=$data; version=$manifest.version;
-            installMonitor=[int]$request.installMonitor; monitorUserControl=[int]($request.installMonitor -and $request.monitorUserControl); monitorStartup=[int]($request.installMonitor -and $request.monitorStartup); monitorExecutable=$monitorExe; monitorHttpPort=[int]$request.httpPort; rebootRequired=($reboot -eq 3010)}
+            installMonitor=[int]$request.installMonitor; monitorUserControl=[int]($request.installMonitor -and $request.monitorUserControl); monitorStartup=[int]($request.installMonitor -and $request.monitorStartup); monitorExecutable=$monitorExe; monitorHttpPort=[int]$request.httpPort; ctlExecutable=$ctlExe; ctlDirectory=$ctlDir; rebootRequired=($reboot -eq 3010)}
         Save-Json $markerPath $deployment
         $transaction.stage='Applied'; Save-Json $journalPath $transaction
         exit $reboot

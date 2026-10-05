@@ -49,6 +49,27 @@ function Setup { param([string]$Executable,[string[]]$Extra,[string]$Case,[switc
 function Uninstall {
     if (Test-Path -LiteralPath $uninstaller) { Setup $uninstaller @() 'uninstall' }
 }
+function Machine-Path {
+    $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
+    try { $key=$base.OpenSubKey('SYSTEM\CurrentControlSet\Control\Session Manager\Environment'); try { return [string]$key.GetValue('Path','',[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) } finally { $key.Dispose() } } finally { $base.Dispose() }
+}
+function Check-Control {
+    param($Deployment)
+    Check (Test-Path -LiteralPath $Deployment.ctlExecutable) 'Command-line helper is installed independently of monitor selection'
+    Check ((Machine-Path).Split(';') -contains $Deployment.ctlDirectory) 'Protected control helper directory is on machine PATH'
+    $check=New-Object Diagnostics.ProcessStartInfo
+    $check.FileName=$Deployment.ctlExecutable; $check.Arguments='status --json'; $check.UseShellExecute=$false; $check.CreateNoWindow=$true; $check.RedirectStandardOutput=$true
+    $process=[Diagnostics.Process]::Start($check)
+    try {
+        $output=$process.StandardOutput.ReadToEnd(); $process.WaitForExit()
+        $status=$output | ConvertFrom-Json
+        Check ($process.ExitCode -eq 0 -and $status.service -eq $name -and $status.serviceState -eq 'stopped' -and -not $status.statusAvailable) 'Installed headless CLI reports the owned stopped service as JSON'
+    } finally { $process.Dispose() }
+    $acl=Get-Acl -LiteralPath $Deployment.ctlExecutable
+    $users=@($acl.Access | Where-Object {$_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq 'S-1-5-11'})
+    $allowed=[Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize
+    Check ($acl.AreAccessRulesProtected -and $users.Count -eq 1 -and [int]$users[0].FileSystemRights -eq [int]$allowed) 'Control helper denies standard-user binary replacement'
+}
 try {
     if ($RecoverMonitorResults) {
         $monitorRepo=Split-Path -Parent (Split-Path -Parent (Split-Path -Parent ([IO.Path]::GetFullPath($RecoverMonitorResults))))
@@ -59,6 +80,8 @@ try {
     Setup $first.setup @('/INSTALLMONITOR=0','/STARTSERVICE=0') 'service-only'
     $deployment=Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
     Check ($deployment.installMonitor -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $app 'monitor'))) 'Silent service-only install omits the monitor executable'
+    Check-Control $deployment
+    $firstCtl=$deployment.ctlDirectory
     $service=Get-EdgeServiceInfo $name
     $result.factoryExitCode=$service.ExitCode
     Check ($service.StartName -eq 'NT AUTHORITY\LocalService' -and $service.State -eq 'Stopped') 'Factory installation creates native LocalService service without requiring credentials or network'
@@ -78,6 +101,7 @@ try {
     Check ($update.version -eq $next.version -and $update.stage -eq 'RolledBack' -and $activationLog -match [regex]::Escape("Upgraded $name to $($next.version).")) 'Failure injection reached core activation and completed its rollback journal'
     Check ((Get-EdgeServiceInfo $name).PathName -eq $oldCommand -and (Get-Content -LiteralPath (Join-Path $data 'service-release.json') -Raw | ConvertFrom-Json).version -eq $first.version) 'Monitor staging failure rolls back the activated core path and version'
     Check ((Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).installMonitor -eq 0 -and (Get-ItemProperty -LiteralPath $policy).AllowStandardUserControl -eq 0) 'Combined rollback restores component selection and service-control policy'
+    Check ((Machine-Path).Split(';') -contains $firstCtl -and (Machine-Path).Split(';') -notcontains (Join-Path $app ('ctl/'+$next.version))) 'Rollback preserves the previous control helper PATH entry'
     $corruptDirectory=Get-EdgeLocalDirectory $corruptDirectory
     if (-not $corruptDirectory.StartsWith($app+'\monitor\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Failure fixture is outside the monitor release directory.' }
     Remove-Item -LiteralPath $corruptFile
@@ -85,9 +109,12 @@ try {
     Setup $next.setup @('/STARTSERVICE=0') 'upgrade-service-only'
     $deployment=Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
     Check ($deployment.version -eq $next.version -and $deployment.installMonitor -eq 0) 'Upgrade preserves service-only component selection'
+    Check-Control $deployment
+    Check ((Machine-Path).Split(';') -notcontains $firstCtl) 'Upgrade removes the obsolete control helper PATH entry'
     Check (Test-Path -LiteralPath (Join-Path $data 'state/qualification-sentinel.txt')) 'Upgrade retains private service state'
     Uninstall
     Check (-not (Get-Service $name -ErrorAction SilentlyContinue)) 'Uninstaller removes the owned service'
+    Check (-not ((Machine-Path).Split(';') | Where-Object { $_.StartsWith($app+'\ctl\',[StringComparison]::OrdinalIgnoreCase) })) 'Uninstaller removes only this installation control helper PATH entries'
     Check (Test-Path -LiteralPath (Join-Path $data 'state/qualification-sentinel.txt')) 'Uninstaller retains private service state'
     # Use the newer version after removing its ARP entry: defaults must include monitor.
     Setup $next.setup @('/STARTSERVICE=0') 'default-monitor'
@@ -110,6 +137,7 @@ try {
     Setup $next.setup @('/INSTALLMONITOR=0','/STARTSERVICE=0') 'remove-monitor'
     $deployment=Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
     Check ($deployment.installMonitor -eq 0 -and (Get-ItemProperty -LiteralPath $policy).AllowStandardUserControl -eq 0) 'Deselecting monitor removes integration and revokes standard-user service control'
+    Check-Control $deployment
     $result.passed=$true
 } catch { $result.error=$_.Exception.Message; $_ | Out-String | Set-Content -LiteralPath (Join-Path $out 'failure.log') }
 finally {

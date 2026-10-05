@@ -2,7 +2,8 @@
 
 `build-installer.ps1` produces a native **x64 setup EXE** containing the Release
 BYOC/OpenSSL EdgeCore service, its offline Visual C++ prerequisite, and the
-separate native Edge Core Monitor. Nothing is downloaded on the target machine.
+separate native Edge Core Monitor, and required native `izuma-edge-ctl` console
+helper. Nothing is downloaded on the target machine.
 This is an Inno Setup installer; the command line below uses setup switches,
 not `msiexec` properties.
 
@@ -30,11 +31,14 @@ Build the core package with `windows/build-package.ps1`, then:
   -AllowUnsigned
 ```
 
-Only the monitor Release executable, policy script, and license are included
+Only the monitor and control-helper Release executables, policy script, and license are included
 from that repository. Both core and monitor are checked for native AMD64 PE
 headers. The combined payload has a SHA-256/size manifest and Windows catalog;
 the existing core package retains its independent manifest and catalog.
 Credentials, source trees, tests and development executables are excluded.
+The monitor build produces both executables. If they are built outside the
+monitor repository's default build directory, pass `-MonitorExecutable` and
+`-ControlExecutable` with their absolute paths.
 
 `-AllowUnsigned` is an explicit **qualification build** choice. Without it,
 the input core catalog must be signed by `-SignerThumbprint`, and a trusted
@@ -78,6 +82,35 @@ file provisioning, startup is **delayed automatic**. The native service uses res
 private data ACLs. Standard users can query status; the optional Start/Stop grant
 updates both the protected HKLM policy and SCM DACL. Deselecting the monitor
 revokes that grant. Service-control policy replaces custom SCM permission grants.
+
+## Command-line service control
+
+Every installation includes `izuma-edge-ctl.exe`, including headless installations
+with `/INSTALLMONITOR=0`. It is a native console program with no PowerShell or
+desktop dependency. Open a new terminal after setup so it receives the updated
+machine PATH:
+
+```console
+izuma-edge-ctl start
+izuma-edge-ctl stop
+izuma-edge-ctl status
+izuma-edge-ctl status --json
+```
+
+Start/stop use the existing protected service policy and SCM permissions. Run
+from an administrator terminal or SYSTEM management job; the helper never opens
+dialogs or requests UAC. It waits up to 30 seconds for service control. Status
+reports SCM state and cloud state read from the verified named pipe; TCP status
+can stay disabled. It does not read or replace private identity files.
+
+The protected executable is under `%ProgramFiles%\Izuma\EdgeSetup\ctl\<version>`.
+`deployment.json` records `ctlExecutable` and `ctlDirectory`. Existing shells or
+long-lived deployment agents can use the absolute path until their environment
+is refreshed. Upgrades/rollback update only owned PATH entries, and uninstall
+removes the helper and its PATH entry while retaining device state. Exit codes
+are zero for successful control/status, 2 for usage errors, 5 for access denied,
+21 for a running service without trusted API status, 1060 for missing service,
+and 1460 for timeout. Valid connecting/cloud-error reports return zero.
 
 ## Developer and production file provisioning
 
