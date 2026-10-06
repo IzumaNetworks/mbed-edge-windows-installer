@@ -1,7 +1,7 @@
 # Izuma Edge Windows installer
 
 Native x64 Windows packaging and deployment for Izuma Edge Core and its optional
-tray monitor. This repository owns package creation, Inno Setup authoring,
+tray monitor. This repository owns package creation, MSI and Inno Setup authoring,
 restricted Windows service installation, upgrades/rollback, first file
 provisioning and deployment qualification.
 
@@ -12,6 +12,13 @@ installer consumes their compiled Release outputs; it does not copy their
 source or embed any device identity.
 
 ## Build
+
+For signed MSI releases and GitHub artifacts, follow the
+[MSI and Azure signing guide](windows/installer/MSI.md). It includes the Azure
+OIDC setup for the `izumaedgesigning` account and certificate profile, the
+Visual C++ prerequisite, silent MSI options and `gh` release commands.
+`windows/build-release.ps1` runs the complete GitHub build, test, sign, MSI and
+artifact-download chain in one command; use `-PlanOnly` to inspect its inputs.
 
 Use 64-bit Windows PowerShell 5.1, a native Release BYOC/OpenSSL build of Edge
 Core, the monitor Release executable, the original Microsoft-signed x64 VC++

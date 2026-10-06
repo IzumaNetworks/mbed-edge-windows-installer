@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory=$true)][string]$CorePackageDirectory,
     [Parameter(Mandatory=$true)][string]$MonitorRepositoryDirectory,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [Parameter(Mandatory=$true)][string]$InnoCompiler,
+    [string]$InnoCompiler,
+    [switch]$PrepareOnly,
     [string]$MonitorExecutable,
     [string]$ControlExecutable,
     [switch]$AllowUnsigned,
@@ -27,7 +28,8 @@ $ctl=(Resolve-Path -LiteralPath $ControlExecutable).Path
 Assert-EdgeNativeImage $ctl
 $out=Get-EdgeLocalDirectory ([IO.Path]::GetFullPath($OutputDirectory))
 if (Test-Path -LiteralPath $out) { throw 'OutputDirectory must be new.' }
-if (-not $AllowUnsigned -and -not $SignToolCommand) { throw 'Production builds require a signing command for setup and its uninstaller.' }
+if (-not $PrepareOnly -and -not $InnoCompiler) { throw 'Specify -InnoCompiler, or use -PrepareOnly to stage an MSI payload.' }
+if (-not $PrepareOnly -and -not $AllowUnsigned -and -not $SignToolCommand) { throw 'Production builds require a signing command for setup and its uninstaller.' }
 $bundle=Join-Path $out 'bundle'
 New-Item -ItemType Directory -Path (Join-Path $bundle 'scripts'),(Join-Path $bundle 'monitor'),(Join-Path $bundle 'ctl') -Force | Out-Null
 Copy-Item -LiteralPath $core -Destination (Join-Path $bundle 'core') -Recurse
@@ -37,6 +39,9 @@ Copy-Item -LiteralPath (Join-Path $monitor 'windows/set-service-control-policy.p
 Copy-Item -LiteralPath (Join-Path $monitor 'LICENSE') -Destination (Join-Path $bundle 'monitor')
 foreach ($name in @('deploy.ps1','bundle-tools.ps1','ctl-integration.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "installer/$name") -Destination (Join-Path $bundle 'scripts')
+}
+if ($PrepareOnly) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'installer/msi-deploy.ps1') -Destination (Join-Path $bundle 'scripts')
 }
 foreach ($name in @('package-tools.ps1','service-tools.ps1','install-service.ps1','install-package.ps1','update-service.ps1','provisioning-tools.ps1','provision-service.ps1')) {
     # Maintenance uses this checkout's helpers; validate all of them in the bundle.
@@ -48,13 +53,18 @@ foreach ($file in Get-ChildItem -LiteralPath $bundle -Recurse -File | Sort-Objec
 }
 $metadata | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $bundle 'bundle.json') -Encoding UTF8
 New-FileCatalog -Path $bundle -CatalogFilePath (Join-Path $bundle 'bundle.cat') -CatalogVersion 2 | Out-Null
-if (-not $AllowUnsigned) {
+if (-not $AllowUnsigned -and -not $PrepareOnly) {
     # SignToolCommand is a trusted build-host command, with Inno's $f placeholder.
     $signCommand=$SignToolCommand.Replace('$f',('"'+(Join-Path $bundle 'bundle.cat')+'"'))
     & $env:ComSpec /d /s /c $signCommand
     if ($LASTEXITCODE -ne 0) { throw 'Bundle catalog signing failed.' }
 }
 . (Join-Path $bundle 'scripts/bundle-tools.ps1')
+if ($PrepareOnly) {
+    [void](Test-EdgeInstallerBundle $bundle -AllowUnsigned)
+    Write-Output "Prepared $bundle. Sign bundle.cat before building a production MSI."
+    return
+}
 [void](Test-EdgeInstallerBundle $bundle -AllowUnsigned:$AllowUnsigned -SignerThumbprint $SignerThumbprint)
 $appId='Izuma.Edge.Windows'; $serviceName='EdgeCore'; $suffix=''; $coreFolder='EdgeCore'; $appFolder='EdgeSetup'
 if ($QualificationId) {
