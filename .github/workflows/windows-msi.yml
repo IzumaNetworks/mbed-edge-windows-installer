@@ -109,14 +109,54 @@ jobs:
           if ($version.Major -gt 255 -or $version.Minor -gt 255 -or $version.Build -gt 65535) { throw 'Version exceeds MSI limits.' }
           "commit=$commit" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
           "version=$env:RELEASE_VERSION" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Check Azure sign-in before compilation
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Prepare signing check
+        run: |
+          New-Item -ItemType Directory build/signing-check | Out-Null
+          'Izuma Edge signing workflow preflight' | Set-Content build/signing-check/check.txt
+          New-FileCatalog -Path build/signing-check -CatalogFilePath build/signing-check.cat -CatalogVersion 2.0 | Out-Null
+      - name: Check certificate profile signing before compilation
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\build\signing-check.cat
+          exclude-environment-credential: true
+      - name: Verify signing check
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: ./build/core-source/windows/verify-signatures.ps1 -Path build/signing-check.cat -ExpectedSubject $env:SIGNER_SUBJECT
       - uses: ilammy/msvc-dev-cmd@v1
         if: inputs.core_run_id == ''
         with:
           arch: x64
-      - name: Build pinned OpenSSL SDK
+      - name: Restore pinned OpenSSL SDK
         if: inputs.core_run_id == ''
+        id: openssl-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/core-source/build/openssl/install
+            build/core-source/build/openssl/openssl-3.5.9/LICENSE.txt
+          key: windows-2022-openssl-3.5.9-${{ env.VCToolsVersion }}-${{ hashFiles('build/core-source/windows/build-openssl.ps1') }}
+      - name: Build pinned OpenSSL SDK
+        if: inputs.core_run_id == '' && steps.openssl-cache.outputs.cache-hit != 'true'
         working-directory: build/core-source
         run: ./windows/build-openssl.ps1 -OutputDirectory ./build/openssl
+      - name: Save pinned OpenSSL SDK
+        if: inputs.core_run_id == '' && steps.openssl-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/core-source/build/openssl/install
+            build/core-source/build/openssl/openssl-3.5.9/LICENSE.txt
+          key: ${{ steps.openssl-cache.outputs.cache-primary-key }}
       - name: Build and test Core
         if: inputs.core_run_id == ''
         working-directory: build/core-source
