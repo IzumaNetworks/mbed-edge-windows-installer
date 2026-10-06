@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Real isolated Windows service/monitor/installer status qualification.
+# Real isolated Windows service/monitor status qualification; MSI/setup tests are separate.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory=$true)][string]$RunDirectory,
@@ -46,7 +46,7 @@ $probe=Join-Path $run 'monitor-build/windows/Release/monitor-status-e2e.exe'
 $fixture=Join-Path $run 'monitor-build/windows/Release/monitor-service-fixture.exe'
 $failureExe=Join-Path $run '../windows-x64/bin/Release/windows-update-failure.exe'
 $primary=Get-EdgeServiceInfo EdgeCore
-$result=[ordered]@{passed=$false; serviceName=$name; checks=@(); provisioningChecks=0; installerChecks=0;
+$result=[ordered]@{passed=$false; serviceName=$name; checks=@();
     primaryServiceUnchanged=$false; cleanupVerified=$false; error=$null; evidenceDirectory=$out}
 $data=Join-Path $out 'pipe-data'; $install=Join-Path $out 'pipe-installation'
 $tcpData=Join-Path $out 'tcp-data'; $tcpInstall=Join-Path $out 'tcp-installation'
@@ -196,17 +196,12 @@ try {
         if ($previousResult.serviceName -ne $name -or -not $previousResult.cleanupVerified -or -not $previousResult.primaryServiceUnchanged) {
             throw 'Resume requires cleaned-up evidence for this exact qualification service.'
         }
-        $release=Get-Content -LiteralPath (Join-Path $previous 'setup-lifecycle/results.json') -Raw | ConvertFrom-Json
-        if (-not $release.passed -or -not $release.primaryServiceUnchanged) { throw 'Prior native setup lifecycle must have passed.' }
-        $result.lifecycleEvidenceDirectory=Join-Path $previous 'setup-lifecycle'
         # Reuse only the stopped qualification identity to avoid creating a
         # second cloud device while retrying the live monitor checks.
         New-Item -ItemType Directory -Path $data | Out-Null
         Copy-Item -LiteralPath (Join-Path $previous 'pipe-data/state') -Destination $data -Recurse
         $provisioningArguments=@{}
     } else {
-        & (Join-Path $PSScriptRoot 'test-release.ps1') -InitialResult (Join-Path $run 'initial-setup/installer-result.json') -UpgradeResult (Join-Path $run 'upgrade-setup/installer-result.json') -OutputDirectory (Join-Path $out 'setup-lifecycle')
-        $release=Get-Content -LiteralPath (Join-Path $out 'setup-lifecycle/results.json') -Raw | ConvertFrom-Json
         $provisioningArguments=@{ProvisioningFile=$ProvisioningFile}
         if ($RetainedStateDirectory) {
             $retained=Get-EdgeLocalDirectory ([IO.Path]::GetFullPath($RetainedStateDirectory))
@@ -216,8 +211,6 @@ try {
             $provisioningArguments=@{}
         }
     }
-    $result.provisioningChecks=$release.provisioningChecks; $result.installerChecks=$release.installerChecks
-    Check ($release.passed -and $release.primaryServiceUnchanged) 'Native setup provisioning, component selection, upgrade, rollback and uninstall passed'
     & (Join-Path $initial 'scripts/install-package.ps1') -PackageDirectory $initial -ServiceName $name -InstallRoot $install -DataDirectory $data @provisioningArguments -HttpPort $http -ProtocolPort $pt -AllowUnsigned -Start
     $info=Get-EdgeServiceInfo $name
     Wait-EdgeServiceReady $name $info.PathName $http

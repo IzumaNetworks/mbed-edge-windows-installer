@@ -71,8 +71,9 @@ Major upgrades deploy the new service release before removing the old MSI
 payload. A failure rolls back the service path, deployment record and integration.
 Downgrades are rejected. Uninstall removes the service, shortcut, startup entry
 and command-line PATH integration while retaining device state, logs and core
-releases for recovery. Existing EXE-managed installations must first uninstall
-their EXE installer; they retain device state for the subsequent MSI installation.
+releases for recovery. New deployments use this MSI-based installer; subsequent
+versions use the same upgrade family. Installations without MSI ownership are
+not adopted automatically.
 
 ## One-time Azure and GitHub configuration
 
@@ -237,7 +238,7 @@ release\*.msi release\edge-core.exe --repo OWNER/REPO` after verifying the resul
 ## Local build and qualification
 
 Build the core package and the monitor with the existing helpers. Prepare the
-bundle using `windows/build-installer.ps1 -PrepareOnly`; sign `core/package.cat`
+bundle using `windows/prepare-msi-bundle.ps1`; sign `core/package.cat`
 before preparing that bundle, then sign `bundle.cat`. Prepare the MSI with
 `windows/build-msi.ps1 -PrepareOnly`, sign the DLL reported in `msi-result.json`,
 compile the generated WiX source with WiX/UI extension 6.0.2, and sign the final

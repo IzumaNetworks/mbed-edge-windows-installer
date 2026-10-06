@@ -2,7 +2,7 @@
 
 For the combined service and optional tray monitor setup EXE, see the
 [Izuma Edge installer guide](installer/README.md). The monitor is selected by
-default and can be omitted with `/INSTALLMONITOR=0` during silent deployment.
+default and can be omitted with `INSTALLMONITOR=0` during silent deployment.
 The setup always installs the native `izuma-edge-ctl` console helper for
 `start`, `stop`, `status` and `status --json`, including headless deployments.
 
@@ -12,10 +12,12 @@ license files and an offline Microsoft Visual C++ Redistributable. It requires
 a Release BYOC/OpenSSL build with developer mode disabled. Provisioning files,
 private keys, imported identities and test executables are excluded.
 
-Earlier offline installer and administrative updater versions passed qualification on
-Windows 10 Pro 22H2 x64 (19045.6466). The packages produced so far are unsigned
-qualification artifacts. Release signing, MSI delivery, clean-image prerequisite
-installation and deployment on the other target Windows editions remain pending.
+Signed MSI/setup releases are available through the manual release workflow.
+MSI upgrade/rollback passed isolated Windows 10 qualification. The signed setup
+passed install/uninstall/reinstall checks on a disposable GitHub-hosted runner,
+including runtime installation when absent and retention when sufficient.
+Other target Windows editions and version-to-version setup upgrades still need
+qualification.
 
 ## Build a qualification bundle
 

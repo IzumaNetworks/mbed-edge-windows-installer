@@ -255,7 +255,7 @@ jobs:
           $core = "build/package/edge-core-$env:RELEASE_VERSION-windows-x64"
           ./build/core-source/windows/verify-signatures.ps1 -Path "$core/package.cat" -ExpectedSubject $env:SIGNER_SUBJECT
           $thumbprint = (Get-AuthenticodeSignature -LiteralPath "$core/package.cat").SignerCertificate.Thumbprint
-          ./windows/build-installer.ps1 -CorePackageDirectory $core -MonitorRepositoryDirectory build/monitor -OutputDirectory build/bundle -PrepareOnly -SignerThumbprint $thumbprint
+          ./windows/prepare-msi-bundle.ps1 -CorePackageDirectory $core -MonitorRepositoryDirectory build/monitor -OutputDirectory build/bundle -SignerThumbprint $thumbprint
       - name: Sign bundle catalog
         uses: azure/artifact-signing-action@v2
         with:
