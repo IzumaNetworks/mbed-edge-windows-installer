@@ -51,17 +51,29 @@ release and embedded separately for its core and bundle catalogs.
    `izuma-edge-github-signing`, for this tenant. Record its **Application (client)
    ID**, **Directory (tenant) ID**, and the subscription ID containing the signing
    account. No client secret or downloadable private key is needed.
-2. In that app's **Certificates & secrets > Federated credentials > Add
-   credential**, choose **GitHub Actions deploying Azure resources** and
-   **Entity type: Environment**. Create one credential for each repository:
+2. Read each repository's current GitHub identity prefix:
+
+   ```powershell
+   gh api repos/OWNER/REPOSITORY/actions/oidc/customization/sub --jq .sub_claim_prefix
+   ```
+
+   Append `:environment:windows-signing` to that exact prefix. In the app's
+   **Certificates & secrets > Federated credentials > Add credential**, choose
+   **Other issuer** and enter the issuer, subject and audience below. Create one
+   credential for each repository. These are the verified current subjects:
 
    | Organization | Repository | Environment | Subject |
    | --- | --- | --- | --- |
    | PelionIoT | mbed-edge | windows-signing | `repo:PelionIoT/mbed-edge:environment:windows-signing` |
-   | IzumaNetworks | mbed-edge-windows-installer | windows-signing | `repo:IzumaNetworks/mbed-edge-windows-installer:environment:windows-signing` |
+   | IzumaNetworks | mbed-edge-windows-installer | windows-signing | `repo:IzumaNetworks@109173172/mbed-edge-windows-installer@1402134158:environment:windows-signing` |
 
    Issuer: `https://token.actions.githubusercontent.com`; audience:
    `api://AzureADTokenExchange`.
+
+   GitHub's [immutable subject format](https://docs.github.com/en/actions/reference/security/oidc#immutable-subject-claims)
+   includes owner and repository IDs for newer repositories. Azure must match
+   the exact subject GitHub issues, including these IDs when present. Check the
+   prefix again if a repository is renamed or transferred.
 3. On the Artifact Signing account, open **Access control (IAM) > Add role
    assignment**, choose **Artifact Signing Certificate Profile Signer**, and
    select the app's service principal. This signing role is separate from the
@@ -96,7 +108,8 @@ release and embedded separately for its core and bundle catalogs.
    These IDs and settings are configuration, not private credentials. `gh` can
    set an environment variable with `gh variable set NAME --env windows-signing
    --repo OWNER/REPO --body VALUE`.
-6. In the installer repository's `windows-signing` environment, add these GitHub
+6. In the installer repository's Actions repository secrets, or its
+   `windows-signing` environment secrets, add these GitHub
    secrets, directly in GitHub rather than in source or chat:
 
    | Secret | Access |
@@ -105,7 +118,8 @@ release and embedded separately for its core and bundle catalogs.
    | `CORE_ARTIFACT_READ_TOKEN` | Fine-grained token with Actions read for `PelionIoT/mbed-edge` |
 
    Use separate tokens because the repositories belong to different organization
-   resource owners. The installer's `GITHUB_TOKEN` is scoped to its own repository
+   resource owners. `CORE_ARTIFACT_READ_TOKEN` is needed when downloading a
+   separate Core workflow artifact. The installer's `GITHUB_TOKEN` is scoped to its own repository
    and cannot authorize the cross-repository artifact download. These tokens are
    unrelated to Azure signing. GitHub documents the
    [artifact download permission](https://docs.github.com/en/rest/actions/artifacts#download-an-artifact).
@@ -116,26 +130,31 @@ and [GitHub OIDC connection](https://learn.microsoft.com/en-us/azure/developer/g
 ## Release workflow
 
 `windows/build-release.ps1` is the single entry point for the complete build.
-It runs the two workflows in order, waits for each to succeed, and downloads the
-final signed artifacts. Builds and signing run on GitHub's Windows runners;
+It waits for the workflows to succeed and downloads the final signed artifacts.
+Use `-BuildCoreInInstaller` to build everything in the installer's single manual
+workflow. Builds and signing run on GitHub's Windows runners;
 your local machine needs an authenticated `gh` CLI and Windows PowerShell 5.1+.
 
 ```powershell
-.\windows\build-release.ps1 -Version RELEASE_VERSION -CoreRef CORE_RELEASE_BRANCH -InstallerRef INSTALLER_RELEASE_BRANCH -MonitorRef MONITOR_COMMIT -OutputDirectory C:\releases\izuma-edge-RELEASE_VERSION
+.\windows\build-release.ps1 -Version RELEASE_VERSION -CoreRef CORE_RELEASE_BRANCH -InstallerRef INSTALLER_RELEASE_BRANCH -MonitorRef MONITOR_COMMIT -BuildCoreInInstaller -OutputDirectory C:\releases\izuma-edge-RELEASE_VERSION
 ```
 
 Add `-PlanOnly` to inspect the inputs without starting builds. Core and installer
 refs are published branches or tags; the monitor ref can also be a commit.
-Add `-BuildCoreInInstaller` to build and sign all components in the installer's
-single manual workflow. This mode does not require the separate Core workflow
+The full build mode does not require the separate Core workflow
 to be registered. In the Actions UI, leave `core_run_id` empty and supply
 `core_ref`, `version`, and `monitor_ref` for the same full build.
+Omit `-BuildCoreInInstaller` to run the registered Core and installer workflows
+in order instead.
 The command builds/tests Edge Core and its dependencies, signs Core and its DLLs,
 builds/tests and signs the monitor and CLI, signs catalogs and the MSI custom
 action, creates/signs the installer, and downloads the resulting release. Azure
 OIDC configuration above must be complete. Workflow files must first be present
 on the repositories' default branches so GitHub registers their dispatch events.
 The selected release refs must contain the matching workflow and helper changes.
+The full installer workflow checks Azure login and verifies a signed temporary
+catalog before compilation. It caches the pinned OpenSSL SDK by compiler version
+and build-script hash immediately after the SDK builds.
 
 Each invocation has a unique identifier in its run titles, so simultaneous
 releases cannot select one another's runs. If either workflow fails, the command
