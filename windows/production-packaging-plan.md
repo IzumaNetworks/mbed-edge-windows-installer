@@ -6,36 +6,35 @@ component is **selected by default**. Operators can install Izuma Edge without
 the monitor; EdgeCore's Windows service and cloud connectivity must work in
 either configuration.
 
-The native x64 setup EXE is implemented by `build-installer.ps1` and
-`installer/izuma-edge.iss`; see the [deployment guide](installer/README.md).
-The first delivery uses Inno Setup with `/VERYSILENT` for management deployment.
-MSI authoring remains a possible later delivery format.
-Both setup EXE and future MSI delivery must include the native `izuma-edge-ctl`
-console helper as a required core component, independent of monitor selection.
-Its source is in `edge-core-monitor/ctl`; the existing setup installs it and
-manages its protected versioned directory and machine PATH entry.
+The native x64 offline setup is authored by `build-setup.ps1`; it embeds the
+MSI produced by `build-msi.ps1` and the original Microsoft-signed x64 VC++
+redistributable. `prepare-msi-bundle.ps1` stages the common payload. See the
+[MSI deployment guide](installer/MSI.md). Both setup and MSI include the native
+`izuma-edge-ctl` helper, independent of monitor selection. Its protected
+versioned directory and machine PATH are maintained during upgrades/rollback.
+Only the MSI-based deployment path is supported for new installations.
 
 Installer behavior:
 
 - Interactive installation presents a checked **Install Edge Core Monitor**
   option.
 - Silent/offline installation exposes the same choice to Intune, SCCM and
-  PowerShell. Setup switch: `/INSTALLMONITOR=1` (default), or
-  `/INSTALLMONITOR=0` to omit it. Upgrades retain the previous selection.
+  PowerShell. Setup property: `INSTALLMONITOR=1` (default), or
+  `INSTALLMONITOR=0` to omit it. Upgrades retain the previous selection.
 - The offline release bundle includes the versioned monitor payload, so
   selecting the component does not require an internet download.
 - The monitor runs under the signed-in user's normal identity in an interactive
   desktop session. Installation must not launch it in service session 0.
   Server Core/headless deployment can omit the component.
 - A separate protected service-control policy defaults to administrators-only,
-  while all users can inspect status. Setup switch
-  `/MONITORUSERCONTROL=0` is the default; `/MONITORUSERCONTROL=1` explicitly grants
+  while all users can inspect status. Setup property
+  `MONITORUSERCONTROL=0` is the default; `MONITORUSERCONTROL=1` explicitly grants
   local interactive users Start/Stop. The installer must apply the monitor
   repository's policy tool to both HKLM policy and the EdgeCore service DACL,
   and install the action helper in a directory writable only by administrators.
 - Installing the component and showing its tray icon are separate choices.
   Installed users retain independent tray-visibility and disconnect/recovery
-  notification preferences. `/MONITORSTARTUP=1` (default) starts the monitor
+  notification preferences. `MONITORSTARTUP=1` (default) starts the monitor
   under each user's normal account at sign-in; `0` disables sign-in startup.
 - Upgrades preserve component selection and per-user preferences. Uninstall
   removes the monitor's binaries and its installer-owned integration while
@@ -44,9 +43,10 @@ Installer behavior:
 Qualification must cover default inclusion, explicit omission, silent/offline
 Intune/SCCM/PowerShell deployment, upgrade with either selection, and service
 operation with the monitor absent. Validate desktop and Server Core scenarios
-separately. Release signing, trusted installer delivery, prerequisite staging,
-redistribution notices and interrupted-upgrade recovery remain production work
-described in the [Windows package guide](README.md).
+separately. Signed offline setup installation, runtime detection and retention,
+and MSI upgrade/rollback have passed qualification. Version-to-version upgrades
+through the outer setup bundle and the remaining Windows editions still need
+qualification; see the [MSI guide](installer/MSI.md).
 
 ## Provisioning phases
 

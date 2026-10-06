@@ -1,138 +1,57 @@
 # Windows deployment qualification
 
-These PowerShell tests exercise package integrity, the native setup EXE,
-restricted service identity, upgrade/rollback and first file provisioning.
-Run from this repository. Build two increasing package/setup versions with the
-same `-QualificationId <GUID>` for installer lifecycle tests. The GUID tests
-never use the real EdgeCore service.
+Run these tests with Windows PowerShell 5.1 from this repository. Installer
+lifecycle tests require increasing MSI versions with the same qualification
+GUID so they cannot change the primary EdgeCore service.
 
-Run `test-provisioning.ps1` before `test-installer.ps1` because the latter leaves
-a private-state sentinel that must block later first provisioning:
-
-```powershell
-.\test\windows-core\test-provisioning.ps1 `
-  -InstallerResult D:\packages\installer-initial\installer-result.json `
-  -OutputDirectory D:\work\mbed-edge-windows-installer\build\provisioning-test
-
-.\test\windows-core\test-installer.ps1 `
-  -InitialResult D:\packages\installer-initial\installer-result.json `
-  -UpgradeResult D:\packages\installer-upgrade\installer-result.json `
-  -OutputDirectory D:\work\mbed-edge-windows-installer\build\installer-test
-
-.\test\windows-core\test-installer-bundle.ps1 `
-  -BundleDirectory D:\packages\installer-initial\bundle `
-  -OutputDirectory D:\work\mbed-edge-windows-installer\build\bundle-test
-
-.\test\windows-core\test-package.ps1 `
-  -PackageDirectory D:\packages\edge-core-1005\edge-core-0.21.1005-windows-x64 `
-  -OutputDirectory D:\work\mbed-edge-windows-installer\build\package-test
-```
-
-Deployment/provisioning tests request administrator approval. Integrity tests
-do not. Provisioning fixtures contain no actual credentials and are never
-started; they qualify staging and activation, not production cloud enrollment.
-Results/protected data are retained and GUID services/policy are removed in
-cleanup. Real production credentials, claim/enrollment behavior, signed delivery,
-Intune/SCCM and other Windows editions remain separate qualification.
-
-`test-package-service.ps1` exercises real-cloud package upgrade and rollback
-with explicitly supplied private provisioning and Edge's native
-`windows-update-failure.exe` test fixture. Native service lifecycle/boot tests
-remain in the Edge repository and accept `-InstallerRepositoryDirectory`.
-
-`test-status-client.ps1` checks legacy HTTP responses under the updater's
-strict PowerShell mode, including missing optional PID metadata, a mismatched
-response PID, a listener owned by another process and a changing service PID.
-It uses local fixtures and requires no administrator access. The end-to-end
-suite also runs it against the packaged helper.
-
-`test-status-e2e.ps1` qualifies the Windows status-pipe change with real cloud
-connectivity. It runs the native setup lifecycle checks, then a real restricted
-LocalService and the native monitor, verifies ordinary interactive-user pipe
-access and TCP status off/on, exercises service stop/recovery and package
-upgrade/rollback, and rejects spoof HTTP and pipe sources. An optional
-`-LegacyPackageDirectory` also tests migration and rollback from an older
-HTTP-only release. The primary EdgeCore process/configuration is checked before
-and after the run, and temporary services and the monitor are removed.
-
-Prepare `RunDirectory` with `context.json` containing `serviceName` (a GUID
-`EdgeCoreMonitorTest-...` name), `initialVersion`, and `upgradeVersion`.
-Put the two package builds in `initial-package` and `upgrade-package`, and
-the two setup builds in `initial-setup` and `upgrade-setup`. Build the monitor
-into `monitor-build` with CMake `MONITOR_QUALIFICATION_SERVICE` equal to that
-GUID service name, and include that monitor executable in both qualification
-setups. The normal monitor build continues to target EdgeCore. This run expects
-the core build's native startup-failure fixture in the adjacent `windows-x64`
-build directory. Supply the existing private CBOR provisioning file; evidence
-and retained test state are protected by Windows ACLs.
-
-For a retry, use a new `-AttemptName e2e-attempt-2` evidence directory and
-`-ResumeEvidenceDirectory` pointing to a prior cleaned-up attempt with a
-passing native setup lifecycle. This reuses its stopped cloud identity and
-installer lifecycle evidence. For a new qualification GUID/package build,
-`-RetainedStateDirectory` may instead reuse a stopped test service's state
-while rerunning the complete native setup lifecycle. These options never
-modify the source state or the primary EdgeCore service.
+- `test-msi.ps1` tests restricted LocalService, required CLI, failed-upgrade
+  rollback, major upgrade, downgrade rejection, uninstall and retained state.
+- `test-setup.ps1` tests the native WiX setup's embedded runtime/MSI chain,
+  install/uninstall/reinstall, shared runtime retention and cached engine
+  signature. Runtime removal is permitted only on disposable GitHub-hosted CI.
+- `test-installer-bundle.ps1` and `test-package.ps1` validate payload integrity
+  and reject tampering and unsigned production catalogs.
+- `test-provisioning-input.ps1` validates credential-free CBOR/JSON staging
+  inputs; `test-ctl-path.ps1` validates owned PATH changes without changing the
+  machine. `test-release-orchestration.ps1` uses a local GitHub CLI fixture.
 
 ```powershell
-.\test\windows-core\test-status-e2e.ps1 `
-  -RunDirectory D:\work\mbed-edge\build\windows-status-e2e-run `
-  -ProvisioningFile D:\factory\private-bundle\provisioning.cbor `
-  -LegacyPackageDirectory D:\packages\previous-release
+.\test\windows-core\test-msi.ps1 -InitialResult D:\qualification\initial\msi-result.json -UpgradeResult D:\qualification\upgrade\msi-result.json -OutputDirectory D:\qualification\msi-test
+.\test\windows-core\test-setup.ps1 -SetupResult D:\qualification\setup\setup-result.json -OutputDirectory D:\qualification\setup-test
 ```
 
-Prior qualification (before extraction) passed 25 installer deployment checks,
-6 bundle integrity checks and 7 package integrity checks on Windows 10 Pro
-22H2 x64. Historical evidence is under `D:\work\mbed-edge\build`; new evidence
-is under this repository's ignored `build` directory.
+Isolated MSI upgrade/rollback qualification passed 17 checks on Windows 10.
+The published signed 0.21.1025 setup passed 13 checks on a disposable hosted
+runner, including runtime absence/presence and actual cached engine signing.
+Version-to-version upgrades through the outer setup bundle still need testing.
+Full production enrollment and other target Windows editions need separate
+qualification. Historical qualification evidence remains in ignored build paths.
 
-For one administrator prompt, `test-release.ps1` runs first provisioning then
-installer lifecycle qualification and verifies the real EdgeCore service keeps
-its original process/configuration. Supply `-InitialResult`, `-UpgradeResult`
-and a new `-OutputDirectory`. No real credentials or cloud device creation are
-used by that run.
+## Service and monitor status qualification
 
+`test-package-service.ps1` exercises real-cloud package upgrade/rollback with
+explicit private provisioning and Edge's native startup-failure fixture.
+`test-status-client.ps1` verifies strict-mode HTTP compatibility and rejects
+status from a different process. It needs no administrator access.
 
-Current extraction/file-provisioning validation passed on Windows 10 Pro
-22H2 x64 (19045.6466) on October 2, 2026. All 18 installer PowerShell scripts
-parse and the native x64 setup builds. The 12 provisioning-input checks,
-6 combined-bundle checks and 7 package checks passed.
+`test-status-e2e.ps1` tests a GUID-isolated restricted service and native monitor,
+ordinary-user named-pipe access, TCP status off/on, recovery, package upgrades,
+rollback and spoof status rejection. It runs independently of installer tests.
+Optional `-LegacyPackageDirectory` tests the older HTTP-only Core protocol;
+this is service protocol compatibility, independent of installer format.
 
-The administrator run of test-release.ps1 passed all 23 provisioning checks
-and 25 installer lifecycle checks using setup versions 0.21.1005 and 0.21.1006.
-Evidence is in build/release-qualification-1/results.json and its provisioning
-and installer subdirectories. The temporary service and monitor policy were
-removed. The existing EdgeCore service retained its process/configuration and
-remained connected. Credential-free fixture data is intentionally retained.
-These results qualify file staging and deployment; production cloud enrollment
-still requires real production credentials and a separate test.
+Prepare `RunDirectory/context.json` with `serviceName` (`EdgeCoreMonitorTest-GUID`),
+`initialVersion` and `upgradeVersion`. Put package builds in `initial-package`
+and `upgrade-package`, a prepared payload in `initial-setup/bundle`, and the
+GUID-targeted monitor/probe build in `monitor-build`. The startup-failure fixture
+must be in the adjacent `windows-x64` build directory. Supply private provisioning
+explicitly. The primary service configuration is checked before and after the
+run; test services and monitors are removed and private state remains protected.
 
-## Windows status-pipe qualification on October 4, 2026
+For retries, `-ResumeEvidenceDirectory` requires cleaned-up evidence with the
+same GUID; it reuses only stopped test identity. `-RetainedStateDirectory` can
+reuse stopped test state with a new GUID. Neither modifies the source state.
 
-The full status-change end-to-end suite passed with unsigned Release packages
-0.21.1016 and 0.21.1017. Evidence is in
-`D:\work\mbed-edge\build\windows-status-e2e-20261004-211411\e2e-attempt-1\results.json`.
-All 27 top-level checks, 23 provisioning checks, 25 native installer lifecycle
-checks, 7 package checks, 6 bundle checks and 5 legacy-client regression checks
-passed. The core Release CTest suite passed 13/13 and the monitor suite 2/2.
-
-The live restricted LocalService retained its real cloud identity through
-restart, upgrade, rollback and migration from the older HTTP-only 0.21.1005
-release. Ordinary interactive-user pipe access, TCP off by default, explicit
-TCP opt-in, monitor Details/button state and disabling TCP again passed.
-The native monitor ignored spoof HTTP status; both monitor and installer
-rejected another process's pipe even when its payload claimed the service PID.
-The core rejected a preclaimed pipe at startup and recovered after its removal.
-
-The suite found and verified fixes for a queued SCM recovery restart racing
-with uninstall, and strict-mode handling of older HTTP responses without
-optional PID metadata. Legacy HTTP still requires the real service to own the
-loopback listener before and after the request.
-
-The qualification monitor uses the production GUI/backend with a GUID service
-name compiled solely for test isolation. Cloud checks reused a stopped test
-identity. All temporary services and the monitor were removed, the original
-shortcut was restored, the elevated test runner was stopped, and the existing
-EdgeCore process/configuration remained unchanged. Private state is retained
-with protected ACLs. This run did not repeat Linux runtime, machine-reboot,
-production-signing or clean-machine prerequisite qualification.
+```powershell
+.\test\windows-core\test-status-e2e.ps1 -RunDirectory D:\work\mbed-edge\build\windows-status-e2e-run -ProvisioningFile D:\factory\private-bundle\provisioning.cbor
+```

@@ -1,7 +1,7 @@
 # Izuma Edge Windows installer
 
 Native x64 Windows packaging and deployment for Izuma Edge Core and its optional
-tray monitor. This repository owns package creation, MSI and Inno Setup authoring,
+tray monitor. This repository owns package creation, WiX MSI and offline setup authoring,
 restricted Windows service installation, upgrades/rollback, first file
 provisioning and deployment qualification.
 
@@ -22,29 +22,15 @@ for one installer launch that installs the runtime, Core, monitor and CLI offlin
 `windows/build-release.ps1` runs the complete GitHub build, test, sign, setup/MSI and
 artifact-download chain in one command; use `-PlanOnly` to inspect its inputs.
 
-Use 64-bit Windows PowerShell 5.1, a native Release BYOC/OpenSSL build of Edge
-Core, the monitor Release executable, the original Microsoft-signed x64 VC++
-redistributable, OpenSSL source for its license, and Inno Setup 7.1+.
-
-```powershell
-.\windows\build-package.ps1 `
-  -EdgeRepositoryDirectory D:\work\mbed-edge `
-  -BuildDirectory D:\work\mbed-edge\build\windows-x64 `
-  -Version 0.21.1005 -OutputDirectory D:\packages\edge-core-1005 `
-  -VisualCppRedistributable D:\tools\vc_redist.x64.exe `
-  -OpenSSLSourceDirectory D:\sources\openssl-3.5.9
-
-.\windows\build-installer.ps1 `
-  -CorePackageDirectory D:\packages\edge-core-1005\edge-core-0.21.1005-windows-x64 `
-  -MonitorRepositoryDirectory D:\work\edge-core-monitor `
-  -InnoCompiler D:\tools\inno\ISCC.exe `
-  -OutputDirectory D:\packages\izuma-edge-1005 -AllowUnsigned
-```
-
-The versions above are synthetic qualification versions. Unsigned output is
-for qualification; production requires release signing. Tools/prerequisites
-are supplied on the build host and included offline where appropriate. Target
-machines need no compiler, Python, Git checkout or internet download to install.
+Local builds use 64-bit Windows PowerShell 5.1, WiX 6.0.2, a native Release
+BYOC/OpenSSL build of Edge Core, the monitor and CLI Release executables, the
+original Microsoft-signed x64 VC++ redistributable, and OpenSSL license source.
+`windows/prepare-msi-bundle.ps1` stages the combined payload;
+`windows/build-msi.ps1` authors the MSI, and `windows/build-setup.ps1` embeds the
+MSI and runtime in the native WiX setup. Follow the signing order in the guide.
+Only the MSI-based installation path is supported. Release workflows remain
+manual (`workflow_dispatch`). Target machines need no compiler, Python, Git
+checkout or internet download to install.
 
 See [setup and silent deployment](windows/installer/README.md),
 [package/updater details](windows/README.md),

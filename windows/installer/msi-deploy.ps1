@@ -64,7 +64,7 @@ try {
     }
     if ($Action -eq 'Apply') {
         if ((Test-Path -LiteralPath (Join-Path $app 'deployment.json')) -and -not (Test-Path -LiteralPath $owner)) {
-            throw 'An EXE-managed deployment is present. Uninstall the EXE first; retained device state can be reused by the MSI.'
+            throw 'An existing deployment is not owned by this MSI. Automatic adoption is not supported.'
         }
         if ((Test-Path -LiteralPath $owner) -and (Get-Service $request.serviceName -ErrorAction SilentlyContinue)) {
             $previous=Get-Content -LiteralPath (Join-Path $app 'deployment.json') -Raw | ConvertFrom-Json
