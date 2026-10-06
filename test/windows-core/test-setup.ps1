@@ -12,9 +12,11 @@ $setup=Get-Content -LiteralPath $SetupResult -Raw | ConvertFrom-Json
 $out=[IO.Path]::GetFullPath($OutputDirectory)
 $qualification=[bool]$setup.qualification
 $suffix=''
+$displayName='Izuma Edge'
 if ($qualification) {
     if ($setup.serviceName -notmatch '^EdgeCoreMonitorTest-([0-9a-f-]{36})$') { throw 'Invalid qualification identity.' }
     $suffix='-qualification-'+[guid]::ParseExact($Matches[1],'D').ToString('D')
+    $displayName+=' qualification '+$setup.serviceName.Substring('EdgeCoreMonitorTest-'.Length)
 } elseif ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or $setup.serviceName -cne 'EdgeCore') {
     throw 'Production setup tests run only on a disposable GitHub-hosted runner.'
 }
@@ -66,7 +68,9 @@ try {
     $deployment=Get-Content -LiteralPath (Join-Path $app 'deployment.json') -Raw | ConvertFrom-Json
     Check ($deployment.version -ceq $setup.version -and $deployment.installMonitor -eq 1 -and (Test-Path -LiteralPath $deployment.ctlExecutable)) 'The one setup launch installs Core, monitor, and command-line control'
     Check ((Get-Service $setup.serviceName).Status -eq 'Stopped') 'Setup forwards STARTSERVICE=0 to the MSI'
-    $cached=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.PSObject.Properties['BundleCachePath'] -and [IO.Path]::GetFileName($_.BundleCachePath) -ceq [IO.Path]::GetFileName($setup.bundle) })
+    # Burn caches the executable name from its compiled manifest, even when the
+    # distribution file is renamed during signing. Match the registered product.
+    $cached=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.PSObject.Properties['BundleCachePath'] -and $_.PSObject.Properties['DisplayName'] -and $_.PSObject.Properties['DisplayVersion'] -and $_.DisplayName -ceq $displayName -and $_.DisplayVersion -ceq $setup.version })
     Check ($cached.Count -eq 1 -and (Test-Path -LiteralPath $cached[0].BundleCachePath)) 'Burn registers one cached setup engine for maintenance'
     if (-not $qualification) {
         $outerSignature=Get-AuthenticodeSignature -LiteralPath $setup.bundle
