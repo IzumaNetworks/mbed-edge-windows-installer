@@ -27,7 +27,10 @@ public class ReleaseGhFixture {
         bool core=endpoint.Contains("windows-release.yml");
         if (core && Path.GetFileName(root)=="single") { Console.Error.WriteLine("Core workflow is not registered in this fixture"); return 1; }
         string input=Path.Combine(root,core?"core-input.json":"msi-input.json");
-        if (post) { File.WriteAllText(input,Console.In.ReadToEnd()); return 0; }
+        if (post) {
+          string file=args[Array.IndexOf(args,"--input")+1];
+          File.WriteAllText(input,file=="-"?Console.In.ReadToEnd():File.ReadAllText(file)); return 0;
+        }
         if (endpoint.Contains("/runs?")) {
           var body=Read(input);
           var inputs=(Dictionary<string,object>)body["inputs"];

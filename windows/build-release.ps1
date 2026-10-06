@@ -40,15 +40,21 @@ if (Test-Path -LiteralPath $out) { throw 'OutputDirectory must be new; previous 
 
 function Invoke-Gh {
     param([string[]]$Arguments,[string]$InputJson)
+    if ($InputJson) {
+        # A JSON file avoids Windows PowerShell's console-dependent stdin BOM.
+        $inputPath=Join-Path $out ('gh-input-'+[guid]::NewGuid().ToString('N')+'.json')
+        [IO.File]::WriteAllText($inputPath,$InputJson,[Text.UTF8Encoding]::new($false))
+        $inputIndex=[Array]::IndexOf($Arguments,'--input')
+        if ($inputIndex -lt 0 -or $Arguments[$inputIndex+1] -ne '-') { throw 'JSON dispatch requires --input -.' }
+        $Arguments[$inputIndex+1]=$inputPath
+    }
     $info=New-Object Diagnostics.ProcessStartInfo
     $info.FileName=$gh; $info.Arguments=ConvertTo-EdgeNativeArguments $Arguments
     $info.UseShellExecute=$false; $info.CreateNoWindow=$true
     $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
-    $info.RedirectStandardInput=[bool]$InputJson
     $process=New-Object Diagnostics.Process; $process.StartInfo=$info
     try {
         [void]$process.Start()
-        if ($InputJson) { $process.StandardInput.WriteLine($InputJson); $process.StandardInput.Close() }
         $stdout=$process.StandardOutput.ReadToEndAsync(); $stderr=$process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
         if ($process.ExitCode -ne 0) { throw "GitHub command failed ($($process.ExitCode)): $($stderr.Result)" }
