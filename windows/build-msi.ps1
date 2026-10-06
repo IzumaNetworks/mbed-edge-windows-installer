@@ -5,12 +5,14 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [string]$WixCommand='wix',
     [string]$CMakePath='cmake',
+    [string]$BrandingDirectory,
     [switch]$AllowUnsigned,
     [switch]$PrepareOnly,
     [ValidatePattern('^[0-9a-f-]{36}$')][string]$QualificationId
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
+if (-not $BrandingDirectory) { $BrandingDirectory=Join-Path $PSScriptRoot 'installer/branding' }
 . (Join-Path $PSScriptRoot 'package-tools.ps1')
 $bundle=(Resolve-Path -LiteralPath $BundleDirectory).Path
 . (Join-Path $bundle 'scripts/bundle-tools.ps1')
@@ -82,6 +84,13 @@ $license=Get-Content -LiteralPath (Join-Path $bundle 'core/licenses/edge.txt') -
 $rtf='{\rtf1\ansi '+$license.Replace('\','\\').Replace('{','\{').Replace('}','\}').Replace("`r",'').Replace("`n",'\par ')+'}'
 $licensePath=Join-Path $out 'license.rtf'
 [IO.File]::WriteAllText($licensePath,$rtf,[Text.Encoding]::ASCII)
+$brandingXml=@()
+foreach ($entry in @(@('banner.png','WixUIBannerBmp'),@('dialog.png','WixUIDialogBmp'))) {
+    $asset=Join-Path $BrandingDirectory $entry[0]
+    if (Test-Path -LiteralPath $asset) { $brandingXml+='<WixVariable Id="'+$entry[1]+'" Value="'+(X ([IO.Path]::GetFullPath($asset)))+'" />' }
+}
+$icon=Join-Path $BrandingDirectory 'installer.ico'
+if (Test-Path -LiteralPath $icon) { $brandingXml+='<Icon Id="InstallerIcon" SourceFile="'+(X ([IO.Path]::GetFullPath($icon)))+'" /><Property Id="ARPPRODUCTICON" Value="InstallerIcon" />' }
 $source=@"
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="$(X $product)" Manufacturer="Izuma Networks" Version="$($manifest.version)" UpgradeCode="$upgrade" Scope="perMachine" InstallerVersion="500" Compressed="yes">
@@ -123,6 +132,7 @@ $source=@"
     </Feature>
     <ui:WixUI Id="WixUI_FeatureTree" />
     <WixVariable Id="WixUILicenseRtf" Value="$(X $licensePath)" />
+    $($brandingXml -join "`n")
     <Binary Id="EdgeActions" SourceFile="$(X $dll)" />
     <CustomAction Id="EdgePrepare" BinaryRef="EdgeActions" DllEntry="Prepare" Execute="immediate" Return="check" />
     <CustomAction Id="EdgeRollback" BinaryRef="EdgeActions" DllEntry="Rollback" Execute="rollback" Impersonate="no" Return="check" HideTarget="yes" />
