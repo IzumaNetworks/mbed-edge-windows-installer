@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 . (Join-Path $PSScriptRoot 'package-tools.ps1')
 function Test-EdgeInstallerBundle {
-    param([string]$Directory, [switch]$AllowUnsigned, [string]$SignerThumbprint)
+    param([string]$Directory, [switch]$AllowUnsigned, [string]$SignerThumbprint, [string]$CoreSignerThumbprint)
     $root=Get-EdgeLocalDirectory $Directory
     $manifest=Get-Content -LiteralPath (Join-Path $root 'bundle.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.schema -ne 1 -or $manifest.product -ne 'Izuma Edge' -or $manifest.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Unsupported installer bundle.' }
@@ -23,7 +23,8 @@ function Test-EdgeInstallerBundle {
     }
     Assert-EdgeNativeImage (Join-Path $root 'monitor/edge-core-monitor.exe')
     Assert-EdgeNativeImage (Join-Path $root 'ctl/izuma-edge-ctl.exe')
-    $core=Test-EdgePackage (Join-Path $root 'core') -AllowUnsigned:$AllowUnsigned -SignerThumbprint $SignerThumbprint
+    if (-not $CoreSignerThumbprint) { $CoreSignerThumbprint=$SignerThumbprint }
+    $core=Test-EdgePackage (Join-Path $root 'core') -AllowUnsigned:$AllowUnsigned -SignerThumbprint $CoreSignerThumbprint
     if ($core.version -ne $manifest.version) { throw 'Core and installer versions differ.' }
     $catalog=Join-Path $root 'bundle.cat'
     if ((Test-FileCatalog -Path $root -CatalogFilePath $catalog) -ne 'Valid') { throw 'Installer bundle catalog check failed.' }

@@ -142,7 +142,9 @@ if ($request.action -ne 'Apply') {
     return
 }
 $bundle=Get-EdgeLocalDirectory $request.bundleDirectory
-$manifest=Test-EdgeInstallerBundle $bundle -AllowUnsigned:([bool]$request.allowUnsigned) -SignerThumbprint $request.signerThumbprint
+$bundleSigner=$request.signerThumbprint
+if ($request.PSObject.Properties.Name -contains 'bundleSignerThumbprint') { $bundleSigner=$request.bundleSignerThumbprint }
+$manifest=Test-EdgeInstallerBundle $bundle -AllowUnsigned:([bool]$request.allowUnsigned) -SignerThumbprint $bundleSigner -CoreSignerThumbprint $request.signerThumbprint
 if ($request.installMonitor -notin @(0,1) -or $request.monitorUserControl -notin @(0,1) -or $request.monitorStartup -notin @(0,1) -or $request.startService -notin @(0,1)) { throw 'Installer options must be 0 or 1.' }
 if ($request.provisioningMode -notin @('developer','production','deferred') -or
     (($request.provisioningMode -eq 'deferred') -ne (-not [bool]$request.provisioningFile))) { throw 'Provisioning mode and file selection do not match.' }

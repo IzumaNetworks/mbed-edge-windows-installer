@@ -1,0 +1,201 @@
+name: Signed Windows MSI
+run-name: Signed Windows MSI (${{ inputs.release_id || 'manual' }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_run_id:
+        description: Successful Signed Windows release run ID in PelionIoT/mbed-edge
+        required: true
+        type: string
+      monitor_ref:
+        description: Reviewed edge-core-monitor commit or tag
+        required: true
+        type: string
+      release_id:
+        description: Optional identifier supplied by the full release script
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: windows-2022
+    environment: windows-signing
+    env:
+      DOTNET_ROLL_FORWARD: Major
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release orchestration without credentials
+        run: ./test/windows-core/test-release-orchestration.ps1 -OutputDirectory build/release-orchestration-tests
+      - name: Check release configuration
+        env:
+          CORE_RUN_ID: ${{ inputs.core_run_id }}
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+          SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+        run: |
+          if ($env:CORE_RUN_ID -notmatch '^\d+$') { throw 'core_run_id must be numeric.' }
+          foreach ($name in @('SIGNER_SUBJECT','SIGNING_PROFILE','AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','SIGNING_ACCOUNT','SIGNING_ENDPOINT')) {
+            if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Configure windows-signing variable $name." }
+          }
+      - name: Download signed core artifact using gh
+        id: core
+        env:
+          GH_TOKEN: ${{ secrets.CORE_ARTIFACT_READ_TOKEN }}
+          CORE_RUN_ID: ${{ inputs.core_run_id }}
+        run: |
+          if (-not $env:GH_TOKEN) { throw 'Configure CORE_ARTIFACT_READ_TOKEN with Actions read access to PelionIoT/mbed-edge.' }
+          $run = gh api "repos/PelionIoT/mbed-edge/actions/runs/$env:CORE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/windows-release.yml') { throw 'Select a successful signed Windows release workflow run.' }
+          gh run download $env:CORE_RUN_ID --repo PelionIoT/mbed-edge --name edge-core-windows-x64-signed --dir build/core-runtime
+          if ($LASTEXITCODE -ne 0) { throw 'Signed core artifact download failed.' }
+          $metadata = Get-Content build/core-runtime/build.json -Raw | ConvertFrom-Json
+          if ($metadata.commit -ne $run.head_sha -or $metadata.profile -ne 'BYOC/OpenSSL/Release' -or $metadata.version -notmatch '^\d+\.\d+\.\d+$') { throw 'Core artifact provenance or profile mismatch.' }
+          "commit=$($run.head_sha)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$($metadata.version)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - uses: actions/checkout@v4
+        with:
+          repository: PelionIoT/mbed-edge
+          ref: ${{ steps.core.outputs.commit }}
+          submodules: recursive
+          path: build/core-source
+      - uses: actions/checkout@v4
+        with:
+          repository: IzumaNetworks/edge-core-monitor
+          ref: ${{ inputs.monitor_ref }}
+          token: ${{ secrets.CROSS_REPO_READ_TOKEN }}
+          path: build/monitor
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install pinned WiX and UI extension
+        run: |
+          dotnet tool install wix --version 6.0.2 --tool-path build/wix
+          if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
+          ./build/wix/wix.exe extension add WixToolset.UI.wixext/6.0.2
+          if ($LASTEXITCODE -ne 0) { throw 'WiX UI extension installation failed.' }
+      - name: Verify core and build monitor
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: |
+          $files = @(Get-ChildItem build/core-runtime -File | Where-Object Extension -in '.exe','.dll' | Select-Object -ExpandProperty FullName)
+          ./build/core-source/windows/verify-signatures.ps1 -Path $files -ExpectedSubject $env:SIGNER_SUBJECT
+          ./build/monitor/windows/build.ps1 -Configuration Release
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign monitor and control helper
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: |
+            ${{ github.workspace }}\build\monitor\build\bin\Release\edge-core-monitor.exe
+            ${{ github.workspace }}\build\monitor\build\bin\Release\izuma-edge-ctl.exe
+          exclude-environment-credential: true
+      - name: Stage core package from verified runtime
+        env:
+          RELEASE_VERSION: ${{ steps.core.outputs.version }}
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: |
+          ./build/core-source/windows/verify-signatures.ps1 -Path build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT
+          New-Item -ItemType Directory build/core/bin/Release,build/licenses -Force | Out-Null
+          foreach ($name in @('edge-core.exe','event.dll','event_core.dll','libcrypto-3-x64.dll','libssl-3-x64.dll')) { Copy-Item -LiteralPath "build/core-runtime/$name" -Destination build/core/bin/Release }
+          @('BYOC_MODE:BOOL=ON','DEVELOPER_MODE:BOOL=OFF','MBED_CLOUD_CLIENT_USE_OPENSSL:BOOL=ON') | Set-Content build/core/CMakeCache.txt
+          Copy-Item build/core-runtime/openssl-LICENSE.txt build/licenses/LICENSE.txt
+          Invoke-WebRequest -Uri https://aka.ms/vs/17/release/vc_redist.x64.exe -OutFile build/vc_redist.x64.exe
+          ./windows/build-package.ps1 -BuildDirectory build/core -EdgeRepositoryDirectory build/core-source -Version $env:RELEASE_VERSION -OutputDirectory build/package -VisualCppRedistributable build/vc_redist.x64.exe -OpenSSLSourceDirectory build/licenses
+      - name: Sign core catalog
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\build\package\edge-core-${{ steps.core.outputs.version }}-windows-x64\package.cat
+          exclude-environment-credential: true
+      - name: Prepare MSI bundle
+        env:
+          RELEASE_VERSION: ${{ steps.core.outputs.version }}
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: |
+          $core = "build/package/edge-core-$env:RELEASE_VERSION-windows-x64"
+          ./build/core-source/windows/verify-signatures.ps1 -Path "$core/package.cat" -ExpectedSubject $env:SIGNER_SUBJECT
+          $thumbprint = (Get-AuthenticodeSignature -LiteralPath "$core/package.cat").SignerCertificate.Thumbprint
+          ./windows/build-installer.ps1 -CorePackageDirectory $core -MonitorRepositoryDirectory build/monitor -OutputDirectory build/bundle -PrepareOnly -SignerThumbprint $thumbprint
+      - name: Sign bundle catalog
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\build\bundle\bundle\bundle.cat
+          exclude-environment-credential: true
+      - name: Prepare native MSI custom action and WiX source
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: |
+          ./build/core-source/windows/verify-signatures.ps1 -Path build/bundle/bundle/bundle.cat -ExpectedSubject $env:SIGNER_SUBJECT
+          ./windows/build-msi.ps1 -BundleDirectory build/bundle/bundle -OutputDirectory build/msi -PrepareOnly
+      - name: Sign native MSI custom action
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\build\msi\native\Release\edge_msi_actions.dll
+          exclude-environment-credential: true
+      - name: Compile MSI with signed contents
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: |
+          ./build/core-source/windows/verify-signatures.ps1 -Path build/msi/native/Release/edge_msi_actions.dll -ExpectedSubject $env:SIGNER_SUBJECT
+          $result = Get-Content build/msi/msi-result.json -Raw | ConvertFrom-Json
+          ./build/wix/wix.exe build $result.wixSource -arch x64 -ext WixToolset.UI.wixext -out $result.msi
+          if ($LASTEXITCODE -ne 0) { throw 'MSI compilation failed.' }
+      - name: Sign MSI
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\build\msi
+          files-folder-filter: msi
+          exclude-environment-credential: true
+      - name: Verify and stage final release artifacts
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+          RELEASE_VERSION: ${{ steps.core.outputs.version }}
+          CORE_RUN_ID: ${{ inputs.core_run_id }}
+          CORE_COMMIT: ${{ steps.core.outputs.commit }}
+        run: |
+          New-Item -ItemType Directory build/release | Out-Null
+          $msi = (Get-Content build/msi/msi-result.json -Raw | ConvertFrom-Json).msi
+          ./build/core-source/windows/verify-signatures.ps1 -Path $msi,build/core-runtime/edge-core.exe,build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT -ReportPath build/release/signatures.json
+          Copy-Item -LiteralPath $msi -Destination build/release
+          Copy-Item build/core-runtime/edge-core.exe,build/vc_redist.x64.exe -Destination build/release
+          Copy-Item build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -Destination build/release
+          Compress-Archive -LiteralPath "build/package/edge-core-$env:RELEASE_VERSION-windows-x64" -DestinationPath "build/release/edge-core-$env:RELEASE_VERSION-windows-x64-signed.zip"
+          @{coreRunId=$env:CORE_RUN_ID;coreCommit=$env:CORE_COMMIT;installerCommit=$env:GITHUB_SHA;monitorCommit=(git -C build/monitor rev-parse HEAD)} | ConvertTo-Json | Set-Content build/release/source.json -Encoding UTF8
+          Get-ChildItem build/release -File | ForEach-Object { "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" } | Set-Content build/release/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: izuma-edge-windows-x64-signed
+          path: build/release/
+          if-no-files-found: error
+          retention-days: 30
