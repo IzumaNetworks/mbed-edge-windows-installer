@@ -24,14 +24,17 @@ $redist=@($payloads | Where-Object { (Get-FileHash -LiteralPath $_.FullName).Has
 if ($msi.Count -ne 1 -or $redist.Count -ne 1) { throw 'Embedded payload hashes differ from the verified source installers.' }
 $redistSignature=Get-AuthenticodeSignature -LiteralPath $redist[0].FullName
 if ($redistSignature.Status -ne 'Valid' -or $redistSignature.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw 'The embedded redistributable must retain its Microsoft signature.' }
-$engine=Join-Path $out 'engine.exe'
-& $WixCommand burn detach $setup.bundle -engine $engine
-if ($LASTEXITCODE -ne 0) { throw 'Final setup engine extraction failed.' }
+# `burn detach` copies a PE prefix for signing. After the complete bundle has
+# been signed, its security directory points at the outer bundle certificate;
+# that truncated prefix is not the restored engine cached by Burn at runtime.
+# Verify the signed source engine here and the actual cached engine in test-setup.
 if (-not $AllowUnsigned) {
-    foreach ($path in @($setup.bundle,$engine,$msi[0].FullName)) {
+    $signedPaths=@($setup.bundle,$msi[0].FullName)
+    if ($setup.PSObject.Properties['engine']) { $signedPaths+= $setup.engine }
+    foreach ($path in $signedPaths) {
         $signature=Get-AuthenticodeSignature -LiteralPath $path
         if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -cne $ExpectedSignerSubject) { throw "Unexpected or invalid timestamped signature: $path" }
     }
 }
 @{passed=$true;version=$setup.version;embeddedPayloads=2;msiSha256=$setup.msiSha256;redistSha256=$setup.redistSha256;qualification=[bool]$setup.qualification} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'results.json') -Encoding UTF8
-Write-Output 'Verified embedded MSI, original Microsoft runtime, and setup/engine signatures.'
+Write-Output 'Verified embedded MSI, original Microsoft runtime and setup signatures; cached-engine verification runs during installation qualification.'

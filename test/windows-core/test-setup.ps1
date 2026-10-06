@@ -34,7 +34,7 @@ New-Item -ItemType Directory -Path $out | Out-Null
 $app=Join-Path $env:ProgramFiles ('Izuma/EdgeSetup'+$suffix)
 $data=Join-Path $env:ProgramData ('Izuma/EdgeCore'+$suffix)
 $key='HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64'
-$result=[ordered]@{passed=$false;checks=@();error=$null;serviceName=$setup.serviceName;runtimeRemoved=$false}
+$result=[ordered]@{passed=$false;checks=@();error=$null;serviceName=$setup.serviceName;runtimeRemoved=$false;cachedEngineVerified=$false}
 function Check { param([bool]$Condition,[string]$Text); if (-not $Condition) { throw $Text }; $result.checks+=$Text; $Text | Add-Content -LiteralPath (Join-Path $out 'progress.log') }
 function Run-Setup {
     param([string]$Case,[switch]$Uninstall)
@@ -66,6 +66,14 @@ try {
     $deployment=Get-Content -LiteralPath (Join-Path $app 'deployment.json') -Raw | ConvertFrom-Json
     Check ($deployment.version -ceq $setup.version -and $deployment.installMonitor -eq 1 -and (Test-Path -LiteralPath $deployment.ctlExecutable)) 'The one setup launch installs Core, monitor, and command-line control'
     Check ((Get-Service $setup.serviceName).Status -eq 'Stopped') 'Setup forwards STARTSERVICE=0 to the MSI'
+    $cached=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.PSObject.Properties['BundleCachePath'] -and [IO.Path]::GetFileName($_.BundleCachePath) -ceq [IO.Path]::GetFileName($setup.bundle) })
+    Check ($cached.Count -eq 1 -and (Test-Path -LiteralPath $cached[0].BundleCachePath)) 'Burn registers one cached setup engine for maintenance'
+    if (-not $qualification) {
+        $outerSignature=Get-AuthenticodeSignature -LiteralPath $setup.bundle
+        $cachedSignature=Get-AuthenticodeSignature -LiteralPath $cached[0].BundleCachePath
+        Check ($outerSignature.Status -eq 'Valid' -and $outerSignature.TimeStamperCertificate -and $cachedSignature.Status -eq 'Valid' -and $cachedSignature.TimeStamperCertificate -and $cachedSignature.SignerCertificate.Subject -ceq $outerSignature.SignerCertificate.Subject) 'The actual cached maintenance engine has the same valid timestamped publisher signature as the setup'
+        $result.cachedEngineVerified=$true
+    }
     if ($RemoveRuntime) {
         $log=(Get-ChildItem -LiteralPath $out -Filter 'runtime-absent*.log' -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join "`n"
         Check ($log -match 'Applying execute package: VisualCppX64, action: Install') 'Burn executes the embedded Microsoft runtime installer before the MSI'

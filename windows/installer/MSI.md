@@ -61,8 +61,9 @@ The prerequisite logo follows the [WiX 6.0.2 internal-UI prerequisite theme](htt
 `windows/build-setup.ps1` verifies the production MSI publisher and Microsoft
 runtime signature, embeds both installers, and detaches the Burn engine for
 signing. After signing and reattachment, `windows/verify-setup.ps1` extracts the
-final setup, checks both embedded payload hashes and verifies the setup, engine
-and MSI publisher/timestamp. The manual release workflow also tests installation
+final setup, checks both embedded payload hashes and verifies the setup, source
+engine and MSI publisher/timestamp. The manual release workflow also verifies
+the actual installed cached engine signature and tests installation
 on a disposable GitHub-hosted runner with the runtime absent and present,
 including uninstall, retained state and retained shared runtime.
 
