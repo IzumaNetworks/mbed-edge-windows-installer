@@ -1,10 +1,10 @@
 # Izuma Edge Windows setup
 
-Use the signed `izuma-edge-VERSION-windows-x64-setup.exe` for a single offline
-installation of the Microsoft x64 VC++ runtime, Edge Core, optional monitor and
-required CLI. The native WiX bundle embeds our MSI and Microsoft's original
-signed redistributable. [Build, signing, branding, upgrades and silent options](MSI.md)
-are documented in the MSI guide.
+Use the signed `izuma-edge-VERSION-windows-x64.msi` for one offline installation
+of Edge Core, optional monitor, required CLI and the included app-local Visual
+C++ runtime DLLs. No separate setup or runtime installer is run.
+[Build, signing, branding, upgrades and silent options](MSI.md) are documented
+in the MSI guide.
 
 Only this MSI-based deployment path is supported for new installations.
 Upgrades retain device identity/state, monitor selection and settings, and the
@@ -19,7 +19,7 @@ record intent and use the common OpenSSL/FCC/KCM importer. Actual production
 FCU output, tenant CA setup and enrollment still require separate qualification.
 
 ```powershell
-.\izuma-edge-VERSION-windows-x64-setup.exe /quiet /norestart /log install.log PROVISIONINGMODE=production 'PROVISIONING=D:\factory\machine-000123.cbor' STARTSERVICE=0
+msiexec /i izuma-edge-VERSION-windows-x64.msi /qn /norestart /l*v install.log PROVISIONINGMODE=production 'PROVISIONING=D:\factory\machine-000123.cbor' STARTSERVICE=0
 ```
 
 Supply a unique factory-issued bundle for each machine. Setup stages it under

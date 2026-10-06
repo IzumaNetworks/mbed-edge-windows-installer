@@ -28,7 +28,7 @@ $release=Join-Path $install ('releases/'+$manifest.version)
 if (Test-Path -LiteralPath $release) { $release += '-reinstall-'+[guid]::NewGuid().ToString('D') }
 $runtime=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64' -ErrorAction SilentlyContinue
 $rebootRequired=$false
-if (-not $runtime -or -not $runtime.Installed -or [version]$runtime.Version.TrimStart('v') -lt [version]$manifest.visualCppVersion) {
+if ((Get-EdgeVisualCppDeployment $manifest) -eq 'shared' -and (-not $runtime -or -not $runtime.Installed -or [version]$runtime.Version.TrimStart('v') -lt [version]$manifest.visualCppVersion)) {
     $redist=Join-Path $PackageDirectory 'prerequisites/vc_redist.x64.exe'
     $signature=Get-AuthenticodeSignature -LiteralPath $redist
     if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {

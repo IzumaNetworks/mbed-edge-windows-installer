@@ -6,13 +6,11 @@ component is **selected by default**. Operators can install Izuma Edge without
 the monitor; EdgeCore's Windows service and cloud connectivity must work in
 either configuration.
 
-The native x64 offline setup is authored by `build-setup.ps1`; it embeds the
-MSI produced by `build-msi.ps1` and the original Microsoft-signed x64 VC++
-redistributable. `prepare-msi-bundle.ps1` stages the common payload. See the
-[MSI deployment guide](installer/MSI.md). Both setup and MSI include the native
-`izuma-edge-ctl` helper, independent of monitor selection. Its protected
-versioned directory and machine PATH are maintained during upgrades/rollback.
-Only the MSI-based deployment path is supported for new installations.
+The signed x64 MSI is authored by `build-msi.ps1`; `prepare-msi-bundle.ps1`
+stages the common payload. It installs Microsoft-signed VC++ runtime DLLs with
+Edge Core in the protected application directory, so one MSI installs all
+dependencies. No setup EXE or shared runtime installer is required. See the
+[MSI deployment guide](installer/MSI.md). Runtime servicing is part of our releases.
 
 Installer behavior:
 
@@ -43,10 +41,10 @@ Installer behavior:
 Qualification must cover default inclusion, explicit omission, silent/offline
 Intune/SCCM/PowerShell deployment, upgrade with either selection, and service
 operation with the monitor absent. Validate desktop and Server Core scenarios
-separately. Signed offline setup installation, runtime detection and retention,
-and MSI upgrade/rollback have passed qualification. Version-to-version upgrades
-through the outer setup bundle and the remaining Windows editions still need
-qualification; see the [MSI guide](installer/MSI.md).
+separately. The single MSI now includes private runtime DLLs. The release workflow
+qualifies runtime absence, repair and retained-state reinstall; inspect that run
+for its result. MSI upgrade/rollback has separate qualification evidence.
+Other Windows editions still need qualification.
 
 ## Provisioning phases
 

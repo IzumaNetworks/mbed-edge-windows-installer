@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.20)
+project(edge_runtime_probe LANGUAGES CXX)
+add_executable(edge-runtime-probe probe.cpp)
+target_compile_features(edge-runtime-probe PRIVATE cxx_std_17)
+target_compile_definitions(edge-runtime-probe PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+target_compile_options(edge-runtime-probe PRIVATE /W4 /WX /EHsc)
+set_property(TARGET edge-runtime-probe PROPERTY MSVC_RUNTIME_LIBRARY MultiThreaded)

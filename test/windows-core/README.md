@@ -6,9 +6,7 @@ GUID so they cannot change the primary EdgeCore service.
 
 - `test-msi.ps1` tests restricted LocalService, required CLI, failed-upgrade
   rollback, major upgrade, downgrade rejection, uninstall and retained state.
-- `test-setup.ps1` tests the native WiX setup's embedded runtime/MSI chain,
-  install/uninstall/reinstall, shared runtime retention and cached engine
-  signature. Runtime removal is permitted only on disposable GitHub-hosted CI.
+- `test-msi-release.ps1` qualifies the actual signed single MSI after removing the shared x64 release runtime on a disposable GitHub-hosted runner. It verifies private DLL loading, repair, uninstall and reinstall with retained state.
 - `test-installer-bundle.ps1` and `test-package.ps1` validate payload integrity
   and reject tampering and unsigned production catalogs.
 - `test-provisioning-input.ps1` validates credential-free CBOR/JSON staging
@@ -17,13 +15,11 @@ GUID so they cannot change the primary EdgeCore service.
 
 ```powershell
 .\test\windows-core\test-msi.ps1 -InitialResult D:\qualification\initial\msi-result.json -UpgradeResult D:\qualification\upgrade\msi-result.json -OutputDirectory D:\qualification\msi-test
-.\test\windows-core\test-setup.ps1 -SetupResult D:\qualification\setup\setup-result.json -OutputDirectory D:\qualification\setup-test
+.\test\windows-core\test-msi-release.ps1 -MsiPath D:\qualification\izuma-edge-VERSION-windows-x64.msi -CorePackageDirectory D:\qualification\edge-core-VERSION-windows-x64 -OutputDirectory D:\qualification\msi-test
 ```
 
 Isolated MSI upgrade/rollback qualification passed 17 checks on Windows 10.
-The published signed 0.21.1025 setup passed 13 checks on a disposable hosted
-runner, including runtime absence/presence and actual cached engine signing.
-Version-to-version upgrades through the outer setup bundle still need testing.
+The MSI now embeds private Microsoft runtime DLLs. Its signed production lifecycle qualification runs in the manual release workflow; inspect that run for the result.
 Full production enrollment and other target Windows editions need separate
 qualification. Historical qualification evidence remains in ignored build paths.
 

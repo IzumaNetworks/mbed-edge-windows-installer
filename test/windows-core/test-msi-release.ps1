@@ -1,0 +1,105 @@
+# SPDX-License-Identifier: Apache-2.0
+# Qualify the actual signed MSI and its private runtime on a disposable runner.
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory=$true)][string]$MsiPath,
+    [Parameter(Mandatory=$true)][string]$CorePackageDirectory,
+    [Parameter(Mandatory=$true)][string]$OutputDirectory
+)
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Production MSI qualification and shared-runtime removal require a disposable GitHub-hosted runner.' }
+. (Join-Path $PSScriptRoot '../../windows/package-tools.ps1')
+Assert-EdgeAdministrator
+if (Get-Service EdgeCore -ErrorAction SilentlyContinue) { throw 'Runner must not have an EdgeCore service.' }
+$msi=(Resolve-Path -LiteralPath $MsiPath).Path
+$core=(Resolve-Path -LiteralPath $CorePackageDirectory).Path
+$out=Get-EdgeLocalDirectory ([IO.Path]::GetFullPath($OutputDirectory))
+if (Test-Path -LiteralPath $out) { throw 'OutputDirectory must be new.' }
+New-Item -ItemType Directory -Path $out | Out-Null
+$manifest=Get-Content -LiteralPath (Join-Path $core 'package.json') -Raw | ConvertFrom-Json
+if ((Get-EdgeVisualCppDeployment $manifest) -ne 'app-local') { throw 'The released MSI must include its app-local runtime.' }
+$result=[ordered]@{passed=$false;checks=@();error=$null;version=$manifest.version;sharedRuntimeRemoved=$false}
+$runtimeKey='HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64'
+function Check([bool]$Condition,[string]$Text) { if (-not $Condition) { throw $Text }; $result.checks+=$Text; $Text | Add-Content -LiteralPath (Join-Path $out 'progress.log') }
+function Msi([string]$Action,[string]$Case) {
+    $arguments=$Action+' "'+$msi+'" /qn /norestart /l*v "'+(Join-Path $out ($Case+'.log'))+'"'
+    if ($Action -ne '/x') { $arguments+=' STARTSERVICE=0' }
+    $process=Start-Process "$env:SystemRoot/System32/msiexec.exe" -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
+    try { if ($process.ExitCode -notin @(0,3010)) { throw "$Case failed ($($process.ExitCode)); inspect the MSI log." } } finally { $process.Dispose() }
+}
+function Runtime-Detected {
+    $runtime=Get-ItemProperty -LiteralPath $runtimeKey -ErrorAction SilentlyContinue
+    return [bool]($runtime -and $runtime.PSObject.Properties['Installed'] -and $runtime.Installed)
+}
+try {
+    # Build a static-runtime process before removing the developer runtime.
+    & cmake -E env --unset=Path --unset=PATH "Path=$env:PATH" MSBUILDDISABLENODEREUSE=1 cmake -S (Join-Path $PSScriptRoot 'runtime-probe') -B (Join-Path $out 'probe-build') -G 'Visual Studio 17 2022' -A x64
+    if ($LASTEXITCODE) { throw 'Runtime probe configuration failed.' }
+    & cmake -E env --unset=Path --unset=PATH "Path=$env:PATH" MSBUILDDISABLENODEREUSE=1 cmake --build (Join-Path $out 'probe-build') --config Release --parallel 2
+    if ($LASTEXITCODE) { throw 'Runtime probe compilation failed.' }
+    $probe=Join-Path $out 'probe-build/Release/edge-runtime-probe.exe'
+    $entries=@(foreach ($root in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')) {
+        Get-ChildItem -LiteralPath $root | ForEach-Object { Get-ItemProperty -LiteralPath $_.PSPath }
+    })
+    foreach ($bundle in @($entries | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft Visual C\+\+ .*Redistributable \(x64\) - 14\.' -and $_.PSObject.Properties['BundleCachePath'] })) {
+        $signature=Get-AuthenticodeSignature -LiteralPath $bundle.BundleCachePath
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw 'Runtime uninstaller is not Microsoft-signed.' }
+        $process=Start-Process $bundle.BundleCachePath -ArgumentList '/uninstall /quiet /norestart' -WindowStyle Hidden -Wait -PassThru
+        try { if ($process.ExitCode -notin @(0,3010)) { throw 'Runner runtime bundle removal failed.' } } finally { $process.Dispose() }
+    }
+    $products=@($entries | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft Visual C\+\+ .* X64 (Minimum|Additional) Runtime - 14\.' })
+    foreach ($product in $products) {
+        if ($product.PSChildName -notmatch '^\{[0-9a-fA-F-]{36}\}$') { throw 'Invalid runtime product identity.' }
+        $process=Start-Process "$env:SystemRoot/System32/msiexec.exe" -ArgumentList ('/x '+$product.PSChildName+' /qn /norestart /l*v "'+(Join-Path $out ('remove-'+$product.PSChildName+'.log'))+'"') -WindowStyle Hidden -Wait -PassThru
+        try { if ($process.ExitCode -notin @(0,3010,1605)) { throw 'Runner runtime MSI removal failed.' } } finally { $process.Dispose() }
+    }
+    Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class ReleaseRuntimeState {
+    [DllImport("msi.dll", CharSet=CharSet.Unicode)] public static extern int MsiQueryProductState(string product);
+}
+'@
+    $states=@($products | ForEach-Object { [pscustomobject]@{name=$_.DisplayName;id=$_.PSChildName;state=[ReleaseRuntimeState]::MsiQueryProductState($_.PSChildName)} })
+    $states | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'runtime-product-states.json') -Encoding UTF8
+    Check (@($states | Where-Object state -notin @(-1,2)).Count -eq 0) 'Windows Installer confirms shared x64 release runtime products are absent'
+    if (Runtime-Detected) { Remove-ItemProperty -LiteralPath $runtimeKey -Name Installed }
+    Check (-not (Runtime-Detected)) 'Shared runtime registration is absent before installing the single MSI'
+    $result.sharedRuntimeRemoved=$true
+    Msi '/i' 'install-runtime-absent'
+    $service=Get-EdgeServiceInfo EdgeCore
+    Check ($service.State -eq 'Stopped' -and $service.StartName -eq 'NT AUTHORITY\LocalService') 'Single MSI installs a stopped restricted LocalService service'
+    $app=Join-Path $env:ProgramFiles 'Izuma/EdgeSetup'
+    $data=Join-Path $env:ProgramData 'Izuma/EdgeCore'
+    $deployment=Get-Content -LiteralPath (Join-Path $app 'deployment.json') -Raw | ConvertFrom-Json
+    Check ($deployment.version -eq $manifest.version -and $deployment.installMonitor -eq 1 -and (Test-Path -LiteralPath $deployment.ctlExecutable)) 'MSI includes the monitor and required CLI'
+    $release=Get-Content -LiteralPath (Join-Path $data 'service-release.json') -Raw | ConvertFrom-Json
+    foreach ($name in $manifest.visualCppDlls) {
+        Check ((Get-FileHash -LiteralPath (Join-Path $release.directory $name)).Hash -eq (Get-FileHash -LiteralPath (Join-Path $core ('bin/'+$name))).Hash) "MSI deploys original Microsoft runtime DLL: $name"
+    }
+    & $probe $release.directory *> (Join-Path $out 'runtime-probe.log')
+    Check ($LASTEXITCODE -eq 0) 'Native loader resolves CRT, libevent and OpenSSL from the installed private directory'
+    Check (-not (Runtime-Detected)) 'MSI succeeds without installing a shared runtime or launching its redistributable'
+    $sentinel=Join-Path $data 'state/msi-runtime-state-sentinel.txt'
+    'Credential-free retained identity sentinel.' | Set-Content -LiteralPath $sentinel
+    $stateHash=(Get-FileHash -LiteralPath $sentinel).Hash
+    Msi '/fa' 'repair'
+    Check ((Get-FileHash -LiteralPath $sentinel).Hash -eq $stateHash) 'Repair preserves retained device state'
+    Msi '/x' 'uninstall'
+    Check (-not (Get-Service EdgeCore -ErrorAction SilentlyContinue)) 'MSI uninstall removes the owned service'
+    Check ((Get-FileHash -LiteralPath $sentinel).Hash -eq $stateHash) 'Uninstall preserves device state'
+    Msi '/i' 'reinstall-retained-state'
+    Check ((Get-FileHash -LiteralPath $sentinel).Hash -eq $stateHash) 'MSI reinstalls with retained identity and no provisioning file'
+    $release=Get-Content -LiteralPath (Join-Path $data 'service-release.json') -Raw | ConvertFrom-Json
+    & $probe $release.directory *> (Join-Path $out 'runtime-probe-reinstalled.log')
+    Check ($LASTEXITCODE -eq 0) 'Reinstalled Core dependencies still use the MSI-provided private runtime'
+    Msi '/x' 'final-uninstall'
+    Check (-not (Runtime-Detected)) 'Install, repair and reinstall never require the shared redistributable'
+    $result.passed=$true
+} catch { $result.error=$_.Exception.Message }
+finally {
+    if (Get-Service EdgeCore -ErrorAction SilentlyContinue) { try { Msi '/x' 'cleanup' } catch { } }
+    $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $out 'results.json') -Encoding UTF8
+}
+if (-not $result.passed) { throw $result.error }
+$result.checks

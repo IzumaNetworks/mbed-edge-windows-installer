@@ -80,7 +80,7 @@ Defaults:
 | Configuration and persistent identity | `%ProgramData%\Izuma\EdgeCore\config` and `state` |
 | Service log | `%ProgramData%\Izuma\EdgeCore\logs` |
 | Startup | Delayed automatic with provisioning/retained state; manual for an unprovisioned software-only install |
-| C++ prerequisite | Bundled signed x64 redistributable, `/install /quiet /norestart` if required |
+| C++ runtime | MSI packages include original Microsoft-signed DLLs beside Core; legacy shared-mode ZIP packages include the redistributable |
 
 Omit `-Start` to leave a provisioned factory installation stopped until it is
 started explicitly or Windows next boots. Without a bundle or retained state,
@@ -95,7 +95,7 @@ installation. Dedicated local directories are required; reparse points are
 rejected. Ordinary users and unrelated LocalService services receive no access
 to the protected identity store. The service cannot update its binaries.
 
-The installer accepts prerequisite exit codes 0 and 3010. It returns 3010 when
+Legacy shared-mode ZIP installation accepts prerequisite exit codes 0 and 3010. It returns 3010 when
 the prerequisite requests a restart and never restarts the machine itself.
 Deployments must handle that return code and coordinate their own restart.
 

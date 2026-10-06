@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Shared offline package validation; Windows PowerShell 5.1+.
 . (Join-Path $PSScriptRoot 'service-tools.ps1')
+. (Join-Path $PSScriptRoot 'visual-cpp-tools.ps1')
 function Assert-EdgeAdministrator {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -71,9 +72,13 @@ function Test-EdgePackage {
     }
     foreach ($required in @('bin/edge-core.exe','bin/event.dll','bin/event_core.dll',
             'scripts/install-service.ps1','scripts/service-tools.ps1','scripts/package-tools.ps1',
-            'scripts/install-package.ps1','scripts/update-service.ps1','prerequisites/vc_redist.x64.exe')) {
+            'scripts/install-package.ps1','scripts/update-service.ps1')) {
         if ($required -notin $names) { throw "Missing package member: $required" }
     }
+    if ((Get-EdgeVisualCppDeployment $manifest) -eq 'app-local') {
+        if ('scripts/visual-cpp-tools.ps1' -notin $names) { throw 'App-local runtime validation helper is absent.' }
+        Test-EdgeVisualCppRuntime $manifest $root
+    } elseif ('prerequisites/vc_redist.x64.exe' -notin $names) { throw 'Shared runtime prerequisite is absent.' }
     foreach ($pattern in @('^bin/libcrypto-3[^/]*\.dll$','^bin/libssl-3[^/]*\.dll$')) {
         if (@($names | Where-Object {$_ -match $pattern}).Count -ne 1) { throw 'Expected one OpenSSL 3 TLS and crypto DLL.' }
     }
