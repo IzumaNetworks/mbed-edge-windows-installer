@@ -69,8 +69,25 @@ try {
             $process=Start-Process "$env:SystemRoot/System32/msiexec.exe" -ArgumentList ('/x '+$product.PSChildName+' /qn /norestart /l*v "'+(Join-Path $out ('remove-'+$product.PSChildName+'.log'))+'"') -WindowStyle Hidden -Wait -PassThru
             if ($process.ExitCode -notin @(0,3010,1605)) { throw 'Disposable CI runtime removal failed.' }
         }
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class RuntimeMsiState {
+    [DllImport("msi.dll", CharSet=CharSet.Unicode)]
+    public static extern int MsiQueryProductState(string product);
+}
+'@
+        $states=@($runtimeProducts | ForEach-Object { [pscustomobject]@{product=$_.PSChildName;state=[RuntimeMsiState]::MsiQueryProductState($_.PSChildName)} })
+        $states | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'runtime-product-states.json') -Encoding UTF8
+        Check (@($states | Where-Object { $_.state -notin @(-1,2) }).Count -eq 0) 'Windows Installer confirms all selected x64 runtime products are absent'
         $before=Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
-        Check (-not $before -or -not $before.Installed) 'VC++ x64 runtime registration absent before the single setup launch'
+        if ($before -and $before.PSObject.Properties['Installed'] -and $before.Installed) {
+            # Hosted images can retain this marker after all runtime products
+            # are removed. Clear only the stale detection value on disposable CI.
+            $before | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'stale-runtime-registration.json') -Encoding UTF8
+            Remove-ItemProperty -LiteralPath $key -Name Installed
+        }
+        $before=Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
+        Check (-not $before -or -not $before.PSObject.Properties['Installed'] -or -not $before.Installed) 'VC++ x64 runtime registration absent before the single setup launch'
         $result.runtimeRemoved=$true
     }
     $case=if ($RemoveRuntime) { 'runtime-absent' } else { 'runtime-present' }
