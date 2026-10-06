@@ -1,4 +1,4 @@
-name: Qualify existing signed Windows setup
+name: Qualify existing signed Windows MSI
 on:
   workflow_dispatch:
     inputs:
@@ -37,28 +37,27 @@ jobs:
             if ($line -notmatch '^([a-f0-9]{64})  ([^\\/]+)$') { throw 'Malformed checksum.' }
             if ((Get-FileHash -LiteralPath (Join-Path "$pwd/build/release" $Matches[2])).Hash.ToLowerInvariant() -cne $Matches[1]) { throw 'Artifact checksum mismatch.' }
           }
-          $setup = @(Get-ChildItem build/release -Filter '*-setup.exe')
-          if ($setup.Count -ne 1 -or $setup[0].Name -notmatch '^izuma-edge-(\d+\.\d+\.\d+)-windows-x64-setup.exe$') { throw 'Expected one release setup.' }
+          $msi = @(Get-ChildItem build/release -Filter '*.msi')
+          if ($msi.Count -ne 1 -or $msi[0].Name -notmatch '^izuma-edge-(\d+\.\d+\.\d+)-windows-x64.msi$') { throw 'Expected one release MSI.' }
           $version = $Matches[1]
-          foreach ($file in @($setup[0].FullName,"$pwd/build/release/izuma-edge-$version-windows-x64.msi")) {
-            $signature = Get-AuthenticodeSignature -LiteralPath $file
-            if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -cne $env:SIGNER_SUBJECT) { throw 'Unexpected installer signature.' }
-          }
+          $signature = Get-AuthenticodeSignature -LiteralPath $msi[0].FullName
+          if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -cne $env:SIGNER_SUBJECT) { throw 'Unexpected MSI signature.' }
           Expand-Archive -LiteralPath "build/release/edge-core-$version-windows-x64-signed.zip" -DestinationPath build/core-package
-          $core = Get-Content "build/core-package/edge-core-$version-windows-x64/package.json" -Raw | ConvertFrom-Json
-          @{version=$version;bundle=$setup[0].FullName;serviceName='EdgeCore';qualification=$false;requiredVisualCppVersion=$core.visualCppVersion} | ConvertTo-Json | Set-Content build/setup-result.json -Encoding UTF8
-      - name: Qualify runtime absence, cached signing, install and uninstall
-        run: ./test/windows-core/test-setup.ps1 -SetupResult build/setup-result.json -OutputDirectory build/setup-tests -RemoveRuntime
+          @{version=$version;msi=$msi[0].FullName;core="$pwd/build/core-package/edge-core-$version-windows-x64"} | ConvertTo-Json | Set-Content build/qualification-source.json -Encoding UTF8
+      - name: Qualify runtime absence, install, repair and reinstall
+        run: |
+          $source = Get-Content build/qualification-source.json -Raw | ConvertFrom-Json
+          ./test/windows-core/test-msi-release.ps1 -MsiPath $source.msi -CorePackageDirectory $source.core -OutputDirectory build/msi-tests
       - name: Record qualification source
         if: always()
         env:
           SOURCE_RUN_ID: ${{ inputs.release_run_id }}
         run: |
-          New-Item -ItemType Directory build/setup-tests -Force | Out-Null
-          @{sourceRunId=$env:SOURCE_RUN_ID;qualificationCommit=$env:GITHUB_SHA} | ConvertTo-Json | Set-Content build/setup-tests/source.json -Encoding UTF8
+          New-Item -ItemType Directory build/msi-tests -Force | Out-Null
+          @{sourceRunId=$env:SOURCE_RUN_ID;qualificationCommit=$env:GITHUB_SHA} | ConvertTo-Json | Set-Content build/msi-tests/source.json -Encoding UTF8
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: izuma-edge-setup-qualification
-          path: build/setup-tests/
+          name: izuma-edge-msi-qualification
+          path: build/msi-tests/
           retention-days: 30

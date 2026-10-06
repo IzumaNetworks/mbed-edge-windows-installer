@@ -1,31 +1,29 @@
-# Offline setup, MSI release and Azure signing
+# Self-contained MSI release and Azure signing
 
 `windows/build-msi.ps1` packages the existing service deployment into a native
 x64, per-machine WiX MSI. The tray monitor is optional and selected by default;
 `izuma-edge-ctl.exe` is always installed. Software-only installation leaves
 EdgeCore stopped until device provisioning is supplied separately.
 
-Download and launch **`izuma-edge-VERSION-windows-x64-setup.exe`** for the complete
-installation. This signed native WiX Burn bundle embeds the signed MSI and
-Microsoft's original signed `vc_redist.x64.exe`: one download, one installer
-launch, and no network access needed to obtain installation payloads. It detects
-the installed x64 runtime, installs the embedded runtime when required, then
-opens the MSI's existing feature-selection UI. A sufficient newer runtime is
-retained. The shared Microsoft runtime is permanent and survives Edge uninstall.
-The bootstrapper adds no .NET dependency.
+Download and launch **`izuma-edge-VERSION-windows-x64.msi`**. This one signed MSI
+contains Edge Core, the optional monitor, required CLI and unmodified
+Microsoft-signed x64 Visual C++ runtime DLLs. It installs the runtime beside
+Edge Core in its protected versioned release directory. No shared VC++ runtime
+installation, external setup EXE, nested installer or network download is needed.
+Windows 10 and later provide the Universal CRT as an operating-system component.
 
-Windows Installer cannot nest the redistributable installation inside the MSI
-transaction; the setup bundle installs both packages sequentially. The raw MSI
-remains available for enterprise deployment where the runtime is already managed.
-The setup engine and complete setup executable are signed separately so elevated
-installation and cached maintenance both identify the verified publisher.
+This uses [Microsoft's app-local runtime deployment](https://learn.microsoft.com/en-us/cpp/windows/choosing-a-deployment-method).
+Runtime DLLs retain their Microsoft signatures and are covered by our signed
+package catalogs. We must ship updated runtime DLLs in subsequent releases when
+Microsoft supplies security fixes; Windows Update does not service private copies.
+Redistributable files remain subject to the Visual Studio redistribution terms.
 
 ```powershell
-.\izuma-edge-VERSION-windows-x64-setup.exe /quiet /norestart /log install.log INSTALLMONITOR=0
+msiexec /i izuma-edge-VERSION-windows-x64.msi /qn /norestart /l*v install.log INSTALLMONITOR=0
 # Exit codes 0 and 3010 indicate success; 3010 means a reboot is required.
 ```
 
-For desktop installation, run the setup normally and choose the tray monitor in
+For desktop installation, open the MSI normally and choose the tray monitor in
 the feature tree. Silent options are `INSTALLMONITOR`, `MONITORUSERCONTROL`,
 `MONITORSTARTUP`, and `STARTSERVICE`, each `0` or `1`. Defaults are monitor on,
 standard-user control off, monitor startup on, and service stopped. Upgrades and
@@ -42,30 +40,17 @@ installation remains the responsibility of the existing first-provisioning helpe
 ## Installer branding
 
 Place these optional files in `windows/installer/branding/` before building.
-The build uses the standard WiX graphics when files are absent. The default splash
-is a plain Izuma Edge title; branding files are embedded at build time.
+The build uses the standard WiX graphics when files are absent.
 
-| File | Dimensions, width × height | Usage |
+| File | Size | Use |
 | --- | --- | --- |
-| `banner.png` | 493 × 58 pixels | MSI top banner; keep artwork at the right, leaving room for the title at the left |
-| `dialog.png` | 493 × 312 pixels | MSI welcome/finish background; keep artwork in the left approximately 164 pixels and leave the right side clear for text |
-| `logo.png` | 64 × 64 pixels | Setup prerequisite screen logo; transparency allowed |
-| `splash.bmp` | 493 × 312 pixels (our chosen size) | Startup splash before prerequisite/MSI UI; opaque BMP |
-| `installer.ico` | 16, 32, 48 and 256 pixel square images in one ICO | Setup file and installed-app icon |
+| `banner.png` | 493 x 58 pixels | Banner on interior MSI dialogs |
+| `dialog.png` | 493 x 312 pixels | Shared welcome and finish background |
+| `installer.ico` | Include 16, 32, 48 and 256 pixel images | Installer/Programs and Features icon |
 
-Export the two MSI backgrounds as opaque PNG files. Keep source/vector artwork
-for future scaling; installer text, progress and buttons are drawn by Windows.
-The MSI sizes follow the [WiX UI graphics specification](https://docs.firegiant.com/wix/tools/wixext/wixui/).
-The prerequisite logo follows the [WiX 6.0.2 internal-UI prerequisite theme](https://github.com/wixtoolset/wix/blob/v6.0.2/src/ext/Bal/stdbas/Resources/iuipreq.thm).
-
-`windows/build-setup.ps1` verifies the production MSI publisher and Microsoft
-runtime signature, embeds both installers, and detaches the Burn engine for
-signing. After signing and reattachment, `windows/verify-setup.ps1` extracts the
-final setup, checks both embedded payload hashes and verifies the setup, source
-engine and MSI publisher/timestamp. The manual release workflow also verifies
-the actual installed cached engine signature and tests installation
-on a disposable GitHub-hosted runner with the runtime absent and present,
-including uninstall, retained state and retained shared runtime.
+Export backgrounds as opaque PNGs with white text areas. See the
+[WiX UI graphics specification](https://docs.firegiant.com/wix/tools/wixext/wixui/).
+The existing welcome, finish and banner template PNG sizes remain applicable.
 
 Major upgrades deploy the new service release before removing the old MSI
 payload. A failure rolls back the service path, deployment record and integration.
@@ -210,14 +195,14 @@ Run `.github/workflows/windows-msi.yml` in this repository with the successful
 core workflow's run ID and a reviewed monitor commit or tag. It downloads the
 signed runtime using `gh`, verifies source provenance, builds/tests and signs
 the monitor and CLI, signs both catalogs, signs the native custom-action DLL,
-compiles/signs the MSI and creates/signs the offline setup and its Burn engine.
+compiles/signs the self-contained MSI with its private runtime DLLs.
 Signature and embedded-payload verification must pass before the final
 `izuma-edge-windows-x64-signed` artifact is uploaded. That artifact contains:
 
-- Signed offline `*-setup.exe`, signed MSI and standalone signed `edge-core.exe`, `edge-core-monitor.exe` and
+- Signed MSI and standalone signed `edge-core.exe`, `edge-core-monitor.exe` and
   `izuma-edge-ctl.exe`.
 - Signed core package ZIP with its catalog and runtime dependencies.
-- Original Microsoft VC++ redistributable.
+- Original Microsoft-signed VC++ runtime DLLs inside the MSI and Core package.
 - Signature report, source commits and SHA-256 checksums.
 
 Example commands after those branches are published:
@@ -242,12 +227,11 @@ bundle using `windows/prepare-msi-bundle.ps1`; sign `core/package.cat`
 before preparing that bundle, then sign `bundle.cat`. Prepare the MSI with
 `windows/build-msi.ps1 -PrepareOnly`, sign the DLL reported in `msi-result.json`,
 compile the generated WiX source with WiX/UI extension 6.0.2, and sign the final
-MSI. Then run `windows/build-setup.ps1`, sign the detached engine, reattach with
-`wix burn reattach`, sign the complete setup and run `windows/verify-setup.ps1`.
-Use WiX BootstrapperApplications/Util extensions 6.0.2 for the setup build.
+MSI.
 The workflow expresses this exact signing order. Signing a catalog or
 executable after hashing it into a bundle invalidates the bundle.
 
+Build the Core package with `-VisualCppDeployment app-local` for MSI delivery.
 For credential-free qualification, use `-AllowUnsigned` on bundle preparation,
 and `-AllowUnsigned -QualificationId GUID` on MSI preparation. The GUID is
 mandatory for unsigned MSIs; it separates service names, installation roots,

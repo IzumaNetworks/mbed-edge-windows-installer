@@ -35,7 +35,7 @@ foreach ($name in @('deploy.ps1','bundle-tools.ps1','ctl-integration.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "installer/$name") -Destination (Join-Path $bundle 'scripts')
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'installer/msi-deploy.ps1') -Destination (Join-Path $bundle 'scripts')
-foreach ($name in @('package-tools.ps1','service-tools.ps1','install-service.ps1','install-package.ps1','update-service.ps1','provisioning-tools.ps1','provision-service.ps1')) {
+foreach ($name in @('package-tools.ps1','visual-cpp-tools.ps1','service-tools.ps1','install-service.ps1','install-package.ps1','update-service.ps1','provisioning-tools.ps1','provision-service.ps1')) {
     # Maintenance uses this checkout's helpers; validate all of them in the bundle.
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $bundle 'scripts')
 }

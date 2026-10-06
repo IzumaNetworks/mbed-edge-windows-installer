@@ -1,7 +1,7 @@
 # Izuma Edge Windows installer
 
 Native x64 Windows packaging and deployment for Izuma Edge Core and its optional
-tray monitor. This repository owns package creation, WiX MSI and offline setup authoring,
+tray monitor. This repository owns package creation, self-contained WiX MSI authoring,
 restricted Windows service installation, upgrades/rollback, first file
 provisioning and deployment qualification.
 
@@ -13,24 +13,18 @@ source or embed any device identity.
 
 ## Build
 
-For signed offline setup/MSI releases and GitHub artifacts, follow the
-[MSI and Azure signing guide](windows/installer/MSI.md). It includes the Azure
-OIDC setup for the `izumaedgesigning` account and certificate profile, the
-embedded Visual C++ prerequisite, installer branding sizes, silent setup/MSI
-options and `gh` release commands. Download `izuma-edge-VERSION-windows-x64-setup.exe`
-for one installer launch that installs the runtime, Core, monitor and CLI offline.
-`windows/build-release.ps1` runs the complete GitHub build, test, sign, setup/MSI and
-artifact-download chain in one command; use `-PlanOnly` to inspect its inputs.
+Download `izuma-edge-VERSION-windows-x64.msi` for one offline installation of
+Core, monitor, CLI and the included Microsoft runtime DLLs. No setup EXE wrapper
+or shared runtime installation is needed. Follow the
+[MSI and Azure signing guide](windows/installer/MSI.md).
 
-Local builds use 64-bit Windows PowerShell 5.1, WiX 6.0.2, a native Release
-BYOC/OpenSSL build of Edge Core, the monitor and CLI Release executables, the
-original Microsoft-signed x64 VC++ redistributable, and OpenSSL license source.
-`windows/prepare-msi-bundle.ps1` stages the combined payload;
-`windows/build-msi.ps1` authors the MSI, and `windows/build-setup.ps1` embeds the
-MSI and runtime in the native WiX setup. Follow the signing order in the guide.
-Only the MSI-based installation path is supported. Release workflows remain
-manual (`workflow_dispatch`). Target machines need no compiler, Python, Git
-checkout or internet download to install.
+`windows/build-release.ps1` runs the complete manual GitHub build, test, sign,
+MSI and artifact-download chain; `-PlanOnly` displays its inputs. Local builds use
+64-bit Windows PowerShell 5.1, WiX 6.0.2, native Release BYOC/OpenSSL Core and
+monitor/CLI outputs, Visual Studio's original signed x64 redistributable CRT DLLs,
+and OpenSSL license source. Build the Core package with `-VisualCppDeployment app-local`,
+then use `prepare-msi-bundle.ps1` and `build-msi.ps1`. Follow the signing order in
+the guide. Release workflows remain manual (`workflow_dispatch`).
 
 See [setup and silent deployment](windows/installer/README.md),
 [package/updater details](windows/README.md),

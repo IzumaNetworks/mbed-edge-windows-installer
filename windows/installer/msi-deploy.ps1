@@ -75,10 +75,7 @@ try {
         . (Join-Path $PSScriptRoot 'bundle-tools.ps1')
         $manifest=Test-EdgeInstallerBundle $bundle -AllowUnsigned:([bool]$request.allowUnsigned) -SignerThumbprint $request.bundleSignerThumbprint -CoreSignerThumbprint $request.signerThumbprint
         $core=Get-Content -LiteralPath (Join-Path $bundle 'core/package.json') -Raw | ConvertFrom-Json
-        $runtime=Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64' -ErrorAction SilentlyContinue
-        if (-not $runtime -or -not $runtime.Installed -or [version]$runtime.Version.TrimStart('v') -lt [version]$core.visualCppVersion) {
-            throw "Install the Microsoft x64 Visual C++ Redistributable $($core.visualCppVersion) or newer before running this MSI."
-        }
+        if ((Get-EdgeVisualCppDeployment $core) -ne 'app-local') { throw 'This MSI requires a payload with its embedded app-local Visual C++ runtime.' }
         # The native custom action supplies fixed deployment roots. Check parents
         # for reparse points before creating any SYSTEM-writable request files.
         New-Item -ItemType Directory -Path $app -Force | Out-Null

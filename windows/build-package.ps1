@@ -6,7 +6,9 @@ param(
     [Parameter(Mandatory=$true)][string]$EdgeRepositoryDirectory,
     [Parameter(Mandatory=$true)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
-    [Parameter(Mandatory=$true)][string]$VisualCppRedistributable,
+    [string]$VisualCppRedistributable,
+    [ValidateSet('shared','app-local')][string]$VisualCppDeployment='shared',
+    [string]$VisualCppRuntimeDirectory,
     [Parameter(Mandatory=$true)][string]$OpenSSLSourceDirectory
 )
 $ErrorActionPreference='Stop'
@@ -20,10 +22,18 @@ foreach ($option in @('BYOC_MODE:BOOL=ON','DEVELOPER_MODE:BOOL=OFF','MBED_CLOUD_
 [void][version]$Version
 $out=Get-EdgeLocalDirectory ([IO.Path]::GetFullPath($OutputDirectory))
 if (Test-Path -LiteralPath $out) { throw 'OutputDirectory must be new.' }
-$redist=(Resolve-Path -LiteralPath $VisualCppRedistributable).Path
-$signature=Get-AuthenticodeSignature -LiteralPath $redist
-if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
-    throw 'Use the original Microsoft-signed x64 Visual C++ Redistributable.'
+$runtimeDlls=@(); $runtimeVersion=$null; $redist=$null
+if ($VisualCppDeployment -eq 'app-local') {
+    $runtimeDirectory=Get-EdgeVisualCppRuntimeDirectory $VisualCppRuntimeDirectory
+    $runtimeDlls=@(Get-ChildItem -LiteralPath $runtimeDirectory -File -Filter '*.dll')
+    $runtimeVersion=Assert-EdgeVisualCppRuntimeDll (Join-Path $runtimeDirectory 'vcruntime140.dll')
+    foreach ($file in $runtimeDlls) { [void](Assert-EdgeVisualCppRuntimeDll $file.FullName $runtimeVersion) }
+} else {
+    if (-not $VisualCppRedistributable) { throw 'Shared runtime packages require the original Microsoft redistributable.' }
+    $redist=(Resolve-Path -LiteralPath $VisualCppRedistributable).Path
+    $signature=Get-AuthenticodeSignature -LiteralPath $redist
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw 'Use the original Microsoft-signed x64 Visual C++ Redistributable.' }
+    $runtimeVersion=[version](Get-Item -LiteralPath $redist).VersionInfo.ProductVersion
 }
 $repo=(Resolve-Path -LiteralPath $EdgeRepositoryDirectory).Path
 $stage=Join-Path $out ('edge-core-'+$Version+'-windows-x64')
@@ -39,10 +49,12 @@ foreach ($pattern in @('libcrypto-3*.dll','libssl-3*.dll')) {
     if ($files.Count -ne 1) { throw "Expected one $pattern in Release output." }
     Copy-Item -LiteralPath $files[0].FullName -Destination (Join-Path $stage 'bin')
 }
-foreach ($name in @('install-service.ps1','service-tools.ps1','package-tools.ps1','install-package.ps1','update-service.ps1','provisioning-tools.ps1','provision-service.ps1')) {
+foreach ($name in @('install-service.ps1','service-tools.ps1','package-tools.ps1','visual-cpp-tools.ps1','install-package.ps1','update-service.ps1','provisioning-tools.ps1','provision-service.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $stage 'scripts')
 }
-Copy-Item -LiteralPath $redist -Destination (Join-Path $stage 'prerequisites/vc_redist.x64.exe')
+if ($VisualCppDeployment -eq 'app-local') {
+    foreach ($file in $runtimeDlls) { Copy-Item -LiteralPath $file.FullName -Destination (Join-Path $stage ('bin/'+$file.Name)) }
+} else { Copy-Item -LiteralPath $redist -Destination (Join-Path $stage 'prerequisites/vc_redist.x64.exe') }
 $licenses=@{
     'edge.txt'=(Join-Path $repo 'LICENSE'); 'cloud-client.txt'=(Join-Path $repo 'lib/mbed-cloud-client/LICENSE')
     'libevent.txt'=(Join-Path $repo 'lib/libevent/libevent/LICENSE'); 'libwebsockets.txt'=(Join-Path $repo 'lib/libwebsockets/libwebsockets/LICENSE')
@@ -52,7 +64,8 @@ $licenses=@{
 foreach ($name in $licenses.Keys) { Copy-Item -LiteralPath $licenses[$name] -Destination (Join-Path $stage "licenses/$name") }
 $manifest=[ordered]@{schema=1; product='Izuma Edge Core'; version=$Version; architecture='x64';
     profile='BYOC/OpenSSL/Release'; createdUtc=[DateTime]::UtcNow.ToString('o');
-    visualCppVersion=(Get-Item -LiteralPath $redist).VersionInfo.ProductVersion; files=@()}
+    visualCppVersion=$runtimeVersion.ToString(); visualCppDeployment=$VisualCppDeployment; files=@()}
+if ($VisualCppDeployment -eq 'app-local') { $manifest.visualCppDlls=@($runtimeDlls.Name) }
 foreach ($file in Get-ChildItem -LiteralPath $stage -File -Recurse | Sort-Object FullName) {
     $manifest.files += [ordered]@{path=$file.FullName.Substring($stage.Length+1).Replace('\','/'); bytes=$file.Length;
         sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}

@@ -26,6 +26,8 @@ if (-not $AllowUnsigned) {
     }
 }
 $manifest=Test-EdgeInstallerBundle $bundle -AllowUnsigned:$AllowUnsigned -SignerThumbprint $bundleSigner -CoreSignerThumbprint $coreSigner
+$coreManifest=Get-Content -LiteralPath (Join-Path $bundle 'core/package.json') -Raw | ConvertFrom-Json
+if ((Get-EdgeVisualCppDeployment $coreManifest) -ne 'app-local') { throw 'Build the MSI payload with -VisualCppDeployment app-local so it includes the runtime directly.' }
 $version=[version]$manifest.version
 if ($version.Major -gt 255 -or $version.Minor -gt 255 -or $version.Build -gt 65535) { throw 'MSI version must fit 255.255.65535.' }
 $out=Get-EdgeLocalDirectory ([IO.Path]::GetFullPath($OutputDirectory))
