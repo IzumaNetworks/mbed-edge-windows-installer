@@ -101,7 +101,7 @@ try {
         $plan.installer.inputs.core_run_id=[string]$core.id
         Save-Record
     }
-    Write-Host 'Building/testing the monitor and CLI, signing all contents, and creating/signing the MSI...'
+    Write-Host 'Building/testing the monitor and CLI, signing all contents, and creating/signing the MSI and offline setup...'
     $msi=Start-ReleaseWorkflow $plan.installer "Signed Windows MSI ($requestId)"
     $record.installerRunId=$msi.id; Save-Record
     if ($BuildCoreInInstaller) { $record.coreRunId=$msi.id; Save-Record }
@@ -113,6 +113,7 @@ try {
     }
     $msis=@(Get-ChildItem -LiteralPath $artifacts -Filter "izuma-edge-$Version-windows-x64.msi" -File)
     if ($msis.Count -ne 1) { throw 'Missing expected signed MSI.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $artifacts "izuma-edge-$Version-windows-x64-setup.exe") -PathType Leaf)) { throw 'Missing expected signed offline setup.' }
     $record.complete=$true; Save-Record
     Write-Host "Signed release downloaded to $artifacts"
 } catch {

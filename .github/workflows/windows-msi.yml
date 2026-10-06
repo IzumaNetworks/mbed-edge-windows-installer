@@ -32,6 +32,8 @@ permissions:
 jobs:
   package:
     runs-on: windows-2022
+    outputs:
+      version: ${{ steps.source.outputs.version }}
     environment: windows-signing
     env:
       DOTNET_ROLL_FORWARD: Major
@@ -182,12 +184,14 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
-      - name: Install pinned WiX and UI extension
+      - name: Install pinned WiX and installer extensions
         run: |
           dotnet tool install wix --version 6.0.2 --tool-path build/wix
           if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
-          ./build/wix/wix.exe extension add WixToolset.UI.wixext/6.0.2
-          if ($LASTEXITCODE -ne 0) { throw 'WiX UI extension installation failed.' }
+          foreach ($extension in @('WixToolset.UI.wixext','WixToolset.BootstrapperApplications.wixext','WixToolset.Util.wixext')) {
+            ./build/wix/wix.exe extension add "$extension/6.0.2"
+            if ($LASTEXITCODE -ne 0) { throw "WiX extension installation failed: $extension" }
+          }
       - uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -291,6 +295,39 @@ jobs:
           files-folder: ${{ github.workspace }}\build\msi
           files-folder-filter: msi
           exclude-environment-credential: true
+      - name: Build offline setup and detach its engine
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
+        run: ./windows/build-setup.ps1 -MsiResult build/msi/msi-result.json -CorePackageDirectory "build/package/edge-core-$env:RELEASE_VERSION-windows-x64" -OutputDirectory build/setup -WixCommand ./build/wix/wix.exe -ExpectedSignerSubject $env:SIGNER_SUBJECT
+      - name: Sign setup engine for elevated installation and maintenance
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\build\setup\engine.exe
+          exclude-environment-credential: true
+      - name: Reattach the signed setup engine
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: |
+          $setup = Get-Content build/setup/setup-result.json -Raw | ConvertFrom-Json
+          ./build/core-source/windows/verify-signatures.ps1 -Path $setup.engine -ExpectedSubject $env:SIGNER_SUBJECT
+          ./build/wix/wix.exe burn reattach $setup.unsignedBundle -engine $setup.engine -o $setup.bundle
+          if ($LASTEXITCODE -ne 0) { throw 'Signed setup engine reattachment failed.' }
+      - name: Sign complete offline setup
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\build\setup\izuma-edge-${{ steps.source.outputs.version }}-windows-x64-setup.exe
+          exclude-environment-credential: true
+      - name: Verify offline setup contents
+        env:
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: ./windows/verify-setup.ps1 -SetupResult build/setup/setup-result.json -WixCommand ./build/wix/wix.exe -OutputDirectory build/setup-verified -ExpectedSignerSubject $env:SIGNER_SUBJECT
       - name: Verify and stage final release artifacts
         env:
           SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
@@ -301,8 +338,10 @@ jobs:
         run: |
           New-Item -ItemType Directory build/release | Out-Null
           $msi = (Get-Content build/msi/msi-result.json -Raw | ConvertFrom-Json).msi
-          ./build/core-source/windows/verify-signatures.ps1 -Path $msi,build/core-runtime/edge-core.exe,build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT -ReportPath build/release/signatures.json
+          $setup = (Get-Content build/setup/setup-result.json -Raw | ConvertFrom-Json).bundle
+          ./build/core-source/windows/verify-signatures.ps1 -Path $msi,$setup,build/core-runtime/edge-core.exe,build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT -ReportPath build/release/signatures.json
           Copy-Item -LiteralPath $msi -Destination build/release
+          Copy-Item -LiteralPath $setup -Destination build/release
           Copy-Item build/core-runtime/edge-core.exe,build/vc_redist.x64.exe -Destination build/release
           Copy-Item build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -Destination build/release
           Compress-Archive -LiteralPath "build/package/edge-core-$env:RELEASE_VERSION-windows-x64" -DestinationPath "build/release/edge-core-$env:RELEASE_VERSION-windows-x64-signed.zip"
@@ -313,4 +352,33 @@ jobs:
           name: izuma-edge-windows-x64-signed
           path: build/release/
           if-no-files-found: error
+          retention-days: 30
+
+  qualify-setup:
+    needs: package
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: izuma-edge-windows-x64-signed
+          path: build/release
+      - name: Test one setup launch with runtime absent and present
+        env:
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          Expand-Archive -LiteralPath "build/release/edge-core-$env:RELEASE_VERSION-windows-x64-signed.zip" -DestinationPath build/core-package
+          $core = Get-Content "build/core-package/edge-core-$env:RELEASE_VERSION-windows-x64/package.json" -Raw | ConvertFrom-Json
+          @{version=$env:RELEASE_VERSION;bundle="$pwd/build/release/izuma-edge-$env:RELEASE_VERSION-windows-x64-setup.exe";serviceName='EdgeCore';qualification=$false;requiredVisualCppVersion=$core.visualCppVersion} | ConvertTo-Json | Set-Content build/setup-result.json -Encoding UTF8
+          ./test/windows-core/test-setup.ps1 -SetupResult build/setup-result.json -OutputDirectory build/setup-tests -RemoveRuntime
+      - name: Retain setup qualification logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: izuma-edge-setup-qualification
+          path: build/setup-tests/
+          if-no-files-found: warn
           retention-days: 30

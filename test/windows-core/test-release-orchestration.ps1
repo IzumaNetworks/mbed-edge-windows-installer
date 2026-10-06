@@ -50,7 +50,7 @@ public class ReleaseGhFixture {
         string dest=args[Array.IndexOf(args,"--dir")+1]; Directory.CreateDirectory(dest);
         string source=File.Exists(Path.Combine(root,"core-input.json"))?"core-input.json":"msi-input.json";
         var inputs=(Dictionary<string,object>)Read(Path.Combine(root,source))["inputs"];
-        foreach (string name in new[]{"edge-core.exe","edge-core-monitor.exe","izuma-edge-ctl.exe","signatures.json","source.json","SHA256SUMS.txt","izuma-edge-"+inputs["version"]+"-windows-x64.msi"})
+        foreach (string name in new[]{"edge-core.exe","edge-core-monitor.exe","izuma-edge-ctl.exe","signatures.json","source.json","SHA256SUMS.txt","izuma-edge-"+inputs["version"]+"-windows-x64.msi","izuma-edge-"+inputs["version"]+"-windows-x64-setup.exe"})
           File.WriteAllText(Path.Combine(dest,name),"Fixture data, not a signed release.");
         return 0;
       }
