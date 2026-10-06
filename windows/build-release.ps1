@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$CoreRef,
     [Parameter(Mandatory=$true)][string]$InstallerRef,
     [Parameter(Mandatory=$true)][string]$MonitorRef,
+    [switch]$BuildCoreInInstaller,
     [string]$OutputDirectory,
     [switch]$PlanOnly
 )
@@ -27,6 +28,11 @@ $plan=[ordered]@{
     installer=@{repository=$installerRepo;workflow='windows-msi.yml';ref=$InstallerRef;inputs=@{monitor_ref=$MonitorRef;release_id=$requestId}}
     artifact='izuma-edge-windows-x64-signed'
     buildsRunOn='GitHub Actions Windows runners'
+    buildCoreInInstaller=[bool]$BuildCoreInInstaller
+}
+if ($BuildCoreInInstaller) {
+    $plan.installer.inputs.core_ref=$CoreRef
+    $plan.installer.inputs.version=$Version
 }
 if ($PlanOnly) { $plan | ConvertTo-Json -Depth 6; return }
 $gh=(Get-Command gh -ErrorAction Stop).Source
@@ -70,7 +76,8 @@ function Watch-ReleaseWorkflow {
     if ($LASTEXITCODE -ne 0) { throw "Workflow did not succeed: $($Run.html_url)" }
 }
 # Fail before dispatch when workflows have not been registered on default branches.
-foreach ($definition in @($plan.core,$plan.installer)) {
+$workflows=if ($BuildCoreInInstaller) { @($plan.installer) } else { @($plan.core,$plan.installer) }
+foreach ($definition in $workflows) {
     $workflow=(Invoke-Gh @('api',"repos/$($definition.repository)/actions/workflows/$($definition.workflow)")) | ConvertFrom-Json
     if ($workflow.state -ne 'active') { throw "Enable $($definition.workflow) in $($definition.repository)." }
 }
@@ -80,15 +87,18 @@ $recordPath=Join-Path $out 'release-runs.json'
 function Save-Record { $record | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $recordPath -Encoding UTF8 }
 Save-Record
 try {
-    Write-Host 'Building, testing and signing Edge Core on GitHub...'
-    $core=Start-ReleaseWorkflow $plan.core "Signed Windows core $Version ($requestId)"
-    $record.coreRunId=$core.id; Save-Record
-    Watch-ReleaseWorkflow $coreRepo $core
-    $plan.installer.inputs.core_run_id=[string]$core.id
-    Save-Record
+    if (-not $BuildCoreInInstaller) {
+        Write-Host 'Building, testing and signing Edge Core on GitHub...'
+        $core=Start-ReleaseWorkflow $plan.core "Signed Windows core $Version ($requestId)"
+        $record.coreRunId=$core.id; Save-Record
+        Watch-ReleaseWorkflow $coreRepo $core
+        $plan.installer.inputs.core_run_id=[string]$core.id
+        Save-Record
+    }
     Write-Host 'Building/testing the monitor and CLI, signing all contents, and creating/signing the MSI...'
     $msi=Start-ReleaseWorkflow $plan.installer "Signed Windows MSI ($requestId)"
     $record.installerRunId=$msi.id; Save-Record
+    if ($BuildCoreInInstaller) { $record.coreRunId=$msi.id; Save-Record }
     Watch-ReleaseWorkflow $installerRepo $msi
     $artifacts=Join-Path $out 'artifacts'
     [void](Invoke-Gh @('run','download',[string]$msi.id,'--repo',$installerRepo,'--name',$plan.artifact,'--dir',$artifacts))

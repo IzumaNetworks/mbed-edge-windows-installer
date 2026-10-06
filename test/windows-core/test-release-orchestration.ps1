@@ -25,6 +25,7 @@ public class ReleaseGhFixture {
         bool post=Array.IndexOf(args,"POST")>=0;
         string endpoint=Array.Find(args,a=>a.StartsWith("repos/"));
         bool core=endpoint.Contains("windows-release.yml");
+        if (core && Path.GetFileName(root)=="single") { Console.Error.WriteLine("Core workflow is not registered in this fixture"); return 1; }
         string input=Path.Combine(root,core?"core-input.json":"msi-input.json");
         if (post) { File.WriteAllText(input,Console.In.ReadToEnd()); return 0; }
         if (endpoint.Contains("/runs?")) {
@@ -44,7 +45,8 @@ public class ReleaseGhFixture {
       }
       if (args[0]=="run" && args[1]=="download") {
         string dest=args[Array.IndexOf(args,"--dir")+1]; Directory.CreateDirectory(dest);
-        var inputs=(Dictionary<string,object>)Read(Path.Combine(root,"core-input.json"))["inputs"];
+        string source=File.Exists(Path.Combine(root,"core-input.json"))?"core-input.json":"msi-input.json";
+        var inputs=(Dictionary<string,object>)Read(Path.Combine(root,source))["inputs"];
         foreach (string name in new[]{"edge-core.exe","edge-core-monitor.exe","izuma-edge-ctl.exe","signatures.json","source.json","SHA256SUMS.txt","izuma-edge-"+inputs["version"]+"-windows-x64.msi"})
           File.WriteAllText(Path.Combine(dest,name),"Fixture data, not a signed release.");
         return 0;
@@ -80,6 +82,15 @@ try {
     $record=Get-Content (Join-Path $out 'failed-release/release-runs.json') -Raw | ConvertFrom-Json
     if (-not $rejected -or (Test-Path (Join-Path $env:EDGE_RELEASE_TEST_ROOT 'msi-input.json')) -or $record.complete -or $record.coreRunId -ne 101) { throw 'A failed Core workflow did not stop MSI signing.' }
     $checks+='A failed Core run stops the chain before MSI dispatch and retains its diagnostic run record'
+    $env:EDGE_RELEASE_TEST_ROOT=Join-Path $out 'single'; New-Item -ItemType Directory $env:EDGE_RELEASE_TEST_ROOT | Out-Null
+    $env:EDGE_RELEASE_TEST_FAIL_CORE='0'
+    & $release -Version 0.21.1024 -CoreRef release/core -InstallerRef release/msi -MonitorRef monitor-v1 -BuildCoreInInstaller -OutputDirectory (Join-Path $out 'single-download')
+    $msi=Get-Content (Join-Path $env:EDGE_RELEASE_TEST_ROOT 'msi-input.json') -Raw | ConvertFrom-Json
+    $record=Get-Content (Join-Path $out 'single-download/release-runs.json') -Raw | ConvertFrom-Json
+    if ((Test-Path (Join-Path $env:EDGE_RELEASE_TEST_ROOT 'core-input.json')) -or $msi.inputs.core_ref -ne 'release/core' -or
+        $msi.inputs.version -ne '0.21.1024' -or $msi.inputs.monitor_ref -ne 'monitor-v1' -or
+        -not $record.complete -or $record.coreRunId -ne 202 -or $record.installerRunId -ne 202) { throw 'The full installer workflow did not retain the requested sources and run record.' }
+    $checks+='The single-workflow build succeeds even when the separate Core workflow is not registered'
     @{passed=$true;checks=$checks} | ConvertTo-Json | Set-Content (Join-Path $out 'results.json') -Encoding UTF8
     $checks
 } finally {

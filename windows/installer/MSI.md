@@ -126,6 +126,10 @@ your local machine needs an authenticated `gh` CLI and Windows PowerShell 5.1+.
 
 Add `-PlanOnly` to inspect the inputs without starting builds. Core and installer
 refs are published branches or tags; the monitor ref can also be a commit.
+Add `-BuildCoreInInstaller` to build and sign all components in the installer's
+single manual workflow. This mode does not require the separate Core workflow
+to be registered. In the Actions UI, leave `core_run_id` empty and supply
+`core_ref`, `version`, and `monitor_ref` for the same full build.
 The command builds/tests Edge Core and its dependencies, signs Core and its DLLs,
 builds/tests and signs the monitor and CLI, signs catalogs and the MSI custom
 action, creates/signs the installer, and downloads the resulting release. Azure

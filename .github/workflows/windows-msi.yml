@@ -5,8 +5,17 @@ on:
   workflow_dispatch:
     inputs:
       core_run_id:
-        description: Successful Signed Windows release run ID in PelionIoT/mbed-edge
-        required: true
+        description: Optional successful signed Core run ID; leave empty to build everything here
+        required: false
+        type: string
+      core_ref:
+        description: Core source branch, tag or commit when building everything here
+        default: experiment/win10support
+        required: false
+        type: string
+      version:
+        description: Release version (major.minor.patch) when building everything here
+        required: false
         type: string
       monitor_ref:
         description: Reviewed edge-core-monitor commit or tag
@@ -39,6 +48,8 @@ jobs:
       - name: Check release configuration
         env:
           CORE_RUN_ID: ${{ inputs.core_run_id }}
+          CORE_REF: ${{ inputs.core_ref }}
+          RELEASE_VERSION: ${{ inputs.version }}
           SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
           SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -47,11 +58,17 @@ jobs:
           SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
         run: |
-          if ($env:CORE_RUN_ID -notmatch '^\d+$') { throw 'core_run_id must be numeric.' }
+          if ($env:CORE_RUN_ID) {
+            if ($env:CORE_RUN_ID -notmatch '^\d+$') { throw 'core_run_id must be numeric.' }
+          } else {
+            if (-not $env:CORE_REF -or $env:CORE_REF -match '[\r\n]') { throw 'Supply a Core source ref.' }
+            if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Supply version as major.minor.patch for a full build.' }
+          }
           foreach ($name in @('SIGNER_SUBJECT','SIGNING_PROFILE','AZURE_CLIENT_ID','AZURE_TENANT_ID','AZURE_SUBSCRIPTION_ID','SIGNING_ACCOUNT','SIGNING_ENDPOINT')) {
             if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Configure windows-signing variable $name." }
           }
       - name: Download signed core artifact using gh
+        if: inputs.core_run_id != ''
         id: core
         env:
           GH_TOKEN: ${{ secrets.CORE_ARTIFACT_READ_TOKEN }}
@@ -69,7 +86,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: PelionIoT/mbed-edge
-          ref: ${{ steps.core.outputs.commit }}
+          ref: ${{ steps.core.outputs.commit || inputs.core_ref }}
           submodules: recursive
           path: build/core-source
       - uses: actions/checkout@v4
@@ -78,6 +95,50 @@ jobs:
           ref: ${{ inputs.monitor_ref }}
           token: ${{ secrets.CROSS_REPO_READ_TOKEN }}
           path: build/monitor
+      - name: Record exact Core source and validate release version
+        id: source
+        env:
+          EXPECTED_COMMIT: ${{ steps.core.outputs.commit }}
+          RELEASE_VERSION: ${{ steps.core.outputs.version || inputs.version }}
+        run: |
+          $commit = git -C build/core-source rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-f]{40}$') { throw 'Cannot identify Core source commit.' }
+          if ($env:EXPECTED_COMMIT -and $commit -cne $env:EXPECTED_COMMIT) { throw 'Core source differs from the downloaded artifact.' }
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw 'Use major.minor.patch.' }
+          $version = [version]$env:RELEASE_VERSION
+          if ($version.Major -gt 255 -or $version.Minor -gt 255 -or $version.Build -gt 65535) { throw 'Version exceeds MSI limits.' }
+          "commit=$commit" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$env:RELEASE_VERSION" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: inputs.core_run_id == ''
+        with:
+          arch: x64
+      - name: Build pinned OpenSSL SDK
+        if: inputs.core_run_id == ''
+        working-directory: build/core-source
+        run: ./windows/build-openssl.ps1 -OutputDirectory ./build/openssl
+      - name: Build and test Core
+        if: inputs.core_run_id == ''
+        working-directory: build/core-source
+        run: |
+          ./build-windows.ps1 -Configuration Release -OpenSSLRoot "$pwd/build/openssl/install" -Jobs 4 -CMakeArgument '-DCMAKE_POLICY_VERSION_MINIMUM=3.5','-DEDGE_WINDOWS_TESTS=ON'
+          cmake --build build/windows-x64 --config Release --target windows-core-tests --parallel 4
+          if ($LASTEXITCODE -ne 0) { throw 'Native Core test build failed.' }
+          ctest --test-dir build/windows-x64 -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'Native Core tests failed.' }
+      - name: Stage Core runtime
+        if: inputs.core_run_id == ''
+        env:
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
+          CORE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          $stage = New-Item -ItemType Directory build/core-runtime
+          foreach ($name in @('edge-core.exe','event.dll','event_core.dll','libcrypto-3-x64.dll','libssl-3-x64.dll')) {
+            Copy-Item -LiteralPath "build/core-source/build/windows-x64/bin/Release/$name" -Destination $stage
+          }
+          Copy-Item build/core-source/LICENSE "$stage/edge-LICENSE.txt"
+          Copy-Item build/core-source/build/openssl/openssl-3.5.9/LICENSE.txt "$stage/openssl-LICENSE.txt"
+          @{version=$env:RELEASE_VERSION;commit=$env:CORE_COMMIT;profile='BYOC/OpenSSL/Release';opensslVersion='3.5.9'} | ConvertTo-Json | Set-Content "$stage/build.json" -Encoding UTF8
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
@@ -87,18 +148,31 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'WiX installation failed.' }
           ./build/wix/wix.exe extension add WixToolset.UI.wixext/6.0.2
           if ($LASTEXITCODE -ne 0) { throw 'WiX UI extension installation failed.' }
-      - name: Verify core and build monitor
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign Core runtime
+        if: inputs.core_run_id == ''
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\build\core-runtime
+          files-folder-filter: exe,dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          exclude-environment-credential: true
+      - name: Verify Core and build monitor
         env:
           SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
         run: |
           $files = @(Get-ChildItem build/core-runtime -File | Where-Object Extension -in '.exe','.dll' | Select-Object -ExpandProperty FullName)
           ./build/core-source/windows/verify-signatures.ps1 -Path $files -ExpectedSubject $env:SIGNER_SUBJECT
           ./build/monitor/windows/build.ps1 -Configuration Release
-      - uses: azure/login@v3
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       - name: Sign monitor and control helper
         uses: azure/artifact-signing-action@v2
         with:
@@ -111,7 +185,7 @@ jobs:
           exclude-environment-credential: true
       - name: Stage core package from verified runtime
         env:
-          RELEASE_VERSION: ${{ steps.core.outputs.version }}
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
           SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
         run: |
           ./build/core-source/windows/verify-signatures.ps1 -Path build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT
@@ -127,11 +201,11 @@ jobs:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\build\package\edge-core-${{ steps.core.outputs.version }}-windows-x64\package.cat
+          files: ${{ github.workspace }}\build\package\edge-core-${{ steps.source.outputs.version }}-windows-x64\package.cat
           exclude-environment-credential: true
       - name: Prepare MSI bundle
         env:
-          RELEASE_VERSION: ${{ steps.core.outputs.version }}
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
           SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
         run: |
           $core = "build/package/edge-core-$env:RELEASE_VERSION-windows-x64"
@@ -180,9 +254,10 @@ jobs:
       - name: Verify and stage final release artifacts
         env:
           SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
-          RELEASE_VERSION: ${{ steps.core.outputs.version }}
-          CORE_RUN_ID: ${{ inputs.core_run_id }}
-          CORE_COMMIT: ${{ steps.core.outputs.commit }}
+          RELEASE_VERSION: ${{ steps.source.outputs.version }}
+          CORE_RUN_ID: ${{ inputs.core_run_id || github.run_id }}
+          CORE_RUN_REPOSITORY: ${{ inputs.core_run_id && 'PelionIoT/mbed-edge' || github.repository }}
+          CORE_COMMIT: ${{ steps.source.outputs.commit }}
         run: |
           New-Item -ItemType Directory build/release | Out-Null
           $msi = (Get-Content build/msi/msi-result.json -Raw | ConvertFrom-Json).msi
@@ -191,7 +266,7 @@ jobs:
           Copy-Item build/core-runtime/edge-core.exe,build/vc_redist.x64.exe -Destination build/release
           Copy-Item build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -Destination build/release
           Compress-Archive -LiteralPath "build/package/edge-core-$env:RELEASE_VERSION-windows-x64" -DestinationPath "build/release/edge-core-$env:RELEASE_VERSION-windows-x64-signed.zip"
-          @{coreRunId=$env:CORE_RUN_ID;coreCommit=$env:CORE_COMMIT;installerCommit=$env:GITHUB_SHA;monitorCommit=(git -C build/monitor rev-parse HEAD)} | ConvertTo-Json | Set-Content build/release/source.json -Encoding UTF8
+          @{coreRunId=$env:CORE_RUN_ID;coreRunRepository=$env:CORE_RUN_REPOSITORY;coreCommit=$env:CORE_COMMIT;installerCommit=$env:GITHUB_SHA;monitorCommit=(git -C build/monitor rev-parse HEAD)} | ConvertTo-Json | Set-Content build/release/source.json -Encoding UTF8
           Get-ChildItem build/release -File | ForEach-Object { "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)" } | Set-Content build/release/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
