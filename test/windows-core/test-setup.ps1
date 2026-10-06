@@ -51,10 +51,22 @@ try {
     if ($RemoveRuntime) {
         $restoreRedist=Join-Path (Split-Path -Parent $setup.bundle) 'vc_redist.x64.exe'
         if (-not (Test-Path -LiteralPath $restoreRedist)) { throw 'CI must retain the original redistributable for runner cleanup.' }
-        $runtimeProducts=@(Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' | ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft Visual C\+\+ .* X64 (Minimum|Additional) Runtime - 14\.' })
+        $registryRoots=@('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall','HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall')
+        $runtimeEntries=@(foreach ($root in $registryRoots) { Get-ChildItem $root | ForEach-Object { Get-ItemProperty $_.PSPath } })
+        # VS runners also install the debug runtime, which shares the Installed
+        # registration. Remove the Microsoft bundle and all x64 runtime products.
+        $runtimeBundles=@($runtimeEntries | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft Visual C\+\+ .*Redistributable \(x64\) - 14\.' -and $_.PSObject.Properties['BundleCachePath'] })
+        foreach ($runtimeBundle in $runtimeBundles) {
+            $runtimeSignature=Get-AuthenticodeSignature -LiteralPath $runtimeBundle.BundleCachePath
+            if ($runtimeSignature.Status -ne 'Valid' -or $runtimeSignature.SignerCertificate.Subject -notmatch '(^|, )O=Microsoft Corporation(,|$)') { throw 'The cached runtime uninstaller must be Microsoft-signed.' }
+            $process=Start-Process -FilePath $runtimeBundle.BundleCachePath -ArgumentList '/uninstall /quiet /norestart' -WindowStyle Hidden -Wait -PassThru
+            if ($process.ExitCode -notin @(0,3010)) { throw 'Disposable CI runtime bundle removal failed.' }
+        }
+        $runtimeProducts=@($runtimeEntries | Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft Visual C\+\+ .* X64 (Minimum|Additional|Debug) Runtime - 14\.' })
+        $runtimeProducts | Select-Object DisplayName,PSChildName | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'removed-runtime-products.json') -Encoding UTF8
         foreach ($product in $runtimeProducts) {
             if ($product.PSChildName -notmatch '^\{[0-9A-Fa-f-]{36}\}$') { throw 'Expected MSI product identity for CI runtime removal.' }
-            $process=Start-Process "$env:SystemRoot/System32/msiexec.exe" -ArgumentList ('/x '+$product.PSChildName+' /qn /norestart') -WindowStyle Hidden -Wait -PassThru
+            $process=Start-Process "$env:SystemRoot/System32/msiexec.exe" -ArgumentList ('/x '+$product.PSChildName+' /qn /norestart /l*v "'+(Join-Path $out ('remove-'+$product.PSChildName+'.log'))+'"') -WindowStyle Hidden -Wait -PassThru
             if ($process.ExitCode -notin @(0,3010,1605)) { throw 'Disposable CI runtime removal failed.' }
         }
         $before=Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue

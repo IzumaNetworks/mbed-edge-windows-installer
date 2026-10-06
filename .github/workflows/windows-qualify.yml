@@ -1,0 +1,64 @@
+name: Qualify existing signed Windows setup
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Windows MSI workflow run whose package job succeeded
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    runs-on: windows-2022
+    environment: windows-signing
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify the existing signed build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.release_run_id }}
+          SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
+        run: |
+          if ($env:SOURCE_RUN_ID -notmatch '^\d+$' -or -not $env:SIGNER_SUBJECT) { throw 'Supply a build run and configure the signer subject.' }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $run.path -ne '.github/workflows/windows-msi.yml' -or $run.event -ne 'workflow_dispatch') { throw 'Select the manual signed MSI workflow.' }
+          $jobs = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID/jobs" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or @($jobs.jobs | Where-Object { $_.name -eq 'package' -and $_.conclusion -eq 'success' }).Count -ne 1) { throw 'The signed package job must have succeeded.' }
+          gh run download $env:SOURCE_RUN_ID --repo $env:GITHUB_REPOSITORY --name izuma-edge-windows-x64-signed --dir build/release
+          if ($LASTEXITCODE -ne 0) { throw 'Signed artifact download failed.' }
+          $source = Get-Content build/release/source.json -Raw | ConvertFrom-Json
+          if ($source.installerCommit -cne $run.head_sha) { throw 'Installer source does not match the selected build.' }
+          foreach ($line in Get-Content build/release/SHA256SUMS.txt) {
+            if ($line -notmatch '^([a-f0-9]{64})  ([^\\/]+)$') { throw 'Malformed checksum.' }
+            if ((Get-FileHash -LiteralPath (Join-Path "$pwd/build/release" $Matches[2])).Hash.ToLowerInvariant() -cne $Matches[1]) { throw 'Artifact checksum mismatch.' }
+          }
+          $setup = @(Get-ChildItem build/release -Filter '*-setup.exe')
+          if ($setup.Count -ne 1 -or $setup[0].Name -notmatch '^izuma-edge-(\d+\.\d+\.\d+)-windows-x64-setup.exe$') { throw 'Expected one release setup.' }
+          $version = $Matches[1]
+          foreach ($file in @($setup[0].FullName,"$pwd/build/release/izuma-edge-$version-windows-x64.msi")) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -cne $env:SIGNER_SUBJECT) { throw 'Unexpected installer signature.' }
+          }
+          Expand-Archive -LiteralPath "build/release/edge-core-$version-windows-x64-signed.zip" -DestinationPath build/core-package
+          $core = Get-Content "build/core-package/edge-core-$version-windows-x64/package.json" -Raw | ConvertFrom-Json
+          @{version=$version;bundle=$setup[0].FullName;serviceName='EdgeCore';qualification=$false;requiredVisualCppVersion=$core.visualCppVersion} | ConvertTo-Json | Set-Content build/setup-result.json -Encoding UTF8
+      - name: Qualify runtime absence, cached signing, install and uninstall
+        run: ./test/windows-core/test-setup.ps1 -SetupResult build/setup-result.json -OutputDirectory build/setup-tests -RemoveRuntime
+      - name: Record qualification source
+        if: always()
+        env:
+          SOURCE_RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          New-Item -ItemType Directory build/setup-tests -Force | Out-Null
+          @{sourceRunId=$env:SOURCE_RUN_ID;qualificationCommit=$env:GITHUB_SHA} | ConvertTo-Json | Set-Content build/setup-tests/source.json -Encoding UTF8
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: izuma-edge-setup-qualification
+          path: build/setup-tests/
+          retention-days: 30
