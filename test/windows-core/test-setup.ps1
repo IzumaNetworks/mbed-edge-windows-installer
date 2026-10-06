@@ -76,9 +76,12 @@ public static class RuntimeMsiState {
     public static extern int MsiQueryProductState(string product);
 }
 '@
-        $states=@($runtimeProducts | ForEach-Object { [pscustomobject]@{product=$_.PSChildName;state=[RuntimeMsiState]::MsiQueryProductState($_.PSChildName)} })
+        $states=@($runtimeProducts | ForEach-Object { [pscustomobject]@{name=$_.DisplayName;product=$_.PSChildName;state=[RuntimeMsiState]::MsiQueryProductState($_.PSChildName)} })
         $states | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'runtime-product-states.json') -Encoding UTF8
-        Check (@($states | Where-Object { $_.state -notin @(-1,2) }).Count -eq 0) 'Windows Installer confirms all selected x64 runtime products are absent'
+        # Debug libraries cannot satisfy a Release build's CRT imports. Hosted
+        # VS images can retain debug registration after its uninstall succeeds.
+        $releaseStates=@($states | Where-Object { $_.name -match ' (Minimum|Additional) Runtime - ' })
+        Check (@($releaseStates | Where-Object { $_.state -notin @(-1,2) }).Count -eq 0) 'Windows Installer confirms the x64 release runtime products are absent'
         $before=Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue
         if ($before -and $before.PSObject.Properties['Installed'] -and $before.Installed) {
             # Hosted images can retain this marker after all runtime products
