@@ -10,7 +10,8 @@ starts in the desktop user's session without elevation. Silent and basic-UI
 installs launch neither the wizard nor the monitor. When the HTTP status listener
 is disabled, startup and shortcut commands omit the HTTP port override; monitor
 status continues to use the trusted named pipe. Software-only installation leaves
-EdgeCore stopped until device provisioning is supplied.
+EdgeCore stopped until device provisioning is supplied. A fresh desktop install
+with a retained identity starts Core automatically and reports that it is reused.
 
 Download and launch **`izuma-edge-VERSION-windows-x64.msi`**. This one signed MSI
 contains Edge Core, the optional monitor, required CLI and unmodified
@@ -36,7 +37,8 @@ the feature tree. Silent options are `INSTALLMONITOR`, `MONITORUSERCONTROL`,
 standard-user control off, monitor startup on, and service stopped. Upgrades and
 repairs preserve existing control and monitor startup choices unless an option
 is explicitly supplied, and preserve the service's running state. `STARTSERVICE`
-controls first installation. The monitor feature selection also survives upgrades.
+controls first installation; explicit `STARTSERVICE=0` also suppresses startup
+in the desktop wizard. The monitor feature selection also survives upgrades.
 
 Optional first-install provisioning uses `PROVISIONING="C:\path\device.cbor"`
 and `PROVISIONINGMODE=developer` or `production`; the default is `deferred` with
@@ -47,14 +49,17 @@ for developer file conversion, later provisioning, and retained-identity behavio
 
 ## Installer branding
 
-Place these optional files in `windows/installer/branding/` before building.
-The build uses the standard WiX graphics when files are absent.
+The build requires these PNG files in `windows/installer/`, or an explicit
+`-BrandingDirectory`. It validates dimensions and embeds the original files.
+Welcome and finish use separate artwork. PSD source files remain in the repository
+and are not embedded in the MSI. Branding template ZIPs are no longer release assets.
 
 | File | Size | Use |
 | --- | --- | --- |
 | `banner.png` | 493 x 58 pixels | Banner on interior MSI dialogs |
-| `dialog.png` | 493 x 312 pixels | Shared welcome and finish background |
-| `installer.ico` | Include 16, 32, 48 and 256 pixel images | Installer/Programs and Features icon |
+| `welcome.png` | 493 x 312 pixels | Welcome and maintenance background |
+| `finish.png` | 493 x 312 pixels | Successful completion background |
+| `installer.ico` (optional) | Include 16, 32, 48 and 256 pixel images | Installer/Programs and Features icon |
 
 Export backgrounds as opaque PNGs with white text areas. See the
 [WiX UI graphics specification](https://docs.firegiant.com/wix/tools/wixext/wixui/).

@@ -315,8 +315,9 @@ jobs:
         run: |
           ./build/core-source/windows/verify-signatures.ps1 -Path build/msi/native/Release/edge_msi_actions.dll,build/msi/native/Release/edge-provisioning-wizard.exe -ExpectedSubject $env:SIGNER_SUBJECT
           $result = Get-Content build/msi/msi-result.json -Raw | ConvertFrom-Json
-          ./build/wix/wix.exe build $result.wixSource -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -out $result.msi
+          ./build/wix/wix.exe build $result.wixSource -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -loc $result.localization -out $result.msi
           if ($LASTEXITCODE -ne 0) { throw 'MSI compilation failed.' }
+          ./test/windows-core/test-msi-branding.ps1 -MsiPath $result.msi -OutputDirectory build/branding-check
       - name: Sign MSI
         uses: azure/artifact-signing-action@v2
         with:

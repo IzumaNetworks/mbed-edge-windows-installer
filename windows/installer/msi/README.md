@@ -8,9 +8,10 @@ does not undo the completed installation.
 
 The wizard checks the installed service and its fixed private data directory:
 
-* Existing bootstrap or operational certificate/key files and endpoint: tell
-  the user the existing device identity was found and will continue to be used.
-* A configured bundle or import journal: preserve it and report pending provisioning.
+* Existing bootstrap or operational certificate/key files and endpoint: start
+  the installed service, then tell the user the existing identity will be reused.
+* A configured bundle or import journal: preserve it, start the service, and
+  report pending cloud provisioning.
 * Unknown retained state, unavailable storage, or a running unprovisioned
   service: preserve state and report that administrator attention is needed.
 * Empty stopped service: offer production bundle (`.cbor` or `.json`), developer
@@ -34,6 +35,15 @@ installed wizard backend explicitly from an administrator process:
 "C:\Program Files\Izuma\EdgeMsiHelpers\<version>\edge-provisioning-wizard.exe" --developer "C:\private\credentials.c"
 "C:\Program Files\Izuma\EdgeMsiHelpers\<version>\edge-provisioning-wizard.exe" --production "C:\private\bundle.cbor"
 ```
+
+Fresh desktop installs automatically start Core when retained identity or a
+configured bundle is found. `STARTSERVICE=0` explicitly suppresses wizard
+startup, including after a new bundle import. Repair and major upgrades preserve
+the deployment's running/stopped state unless `STARTSERVICE=1` is requested.
+An administrator can invoke `--resume` without UI to start a configured service;
+it refuses empty or unrecognized state, preserves SCM arguments and identity
+files, and waits up to 30 seconds for the service to report Running. This confirms
+local service startup; cloud connectivity is reported separately by the monitor.
 
 Run the executable without arguments to revisit the wizard later. `--inspect`
 is read-only, has no UI, and returns 0 (empty), 10 (identity files present),

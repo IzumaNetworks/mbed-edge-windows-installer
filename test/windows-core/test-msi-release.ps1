@@ -56,6 +56,24 @@ function Converter([string]$InputFile,[string]$OutputFile,[string]$LogName) {
     } finally { $process.Dispose() }
 }
 
+function Identity-Fingerprints {
+    # Compare only immutable identity records and the retained input bundle;
+    # Core may legitimately update other ESFS state during a normal start.
+    $names=@('CfgParam_mbed.EndpointName','Cert_mbed.BootstrapDeviceCert',
+        'PrvKey_mbed.BootstrapDevicePrivateKey','Cert_mbed.LwM2MDeviceCert','PrvKey_mbed.LwM2MDevicePrivateKey')
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($name in $names) {
+            $hash=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($name))
+            $member=[Convert]::ToBase64String($hash,0,6).Replace('+','#').Replace('/','_')
+            $file=Join-Path $data ('state/mcc_config/WORKING/'+$member)
+            if (Test-Path -LiteralPath $file -PathType Leaf) { $file+'|'+(Get-FileHash -LiteralPath $file).Hash }
+        }
+        Get-ChildItem -LiteralPath (Join-Path $data 'config') -File -Recurse |
+            Where-Object Extension -in @('.cbor','.json') |
+            ForEach-Object { $_.FullName+'|'+(Get-FileHash -LiteralPath $_.FullName).Hash }
+    } finally { $sha.Dispose() }
+}
 function Runtime-Detected {
     $runtime=Get-ItemProperty -LiteralPath $runtimeKey -ErrorAction SilentlyContinue
     return [bool]($runtime -and $runtime.PSObject.Properties['Installed'] -and $runtime.Installed)
@@ -107,6 +125,12 @@ public static class ReleaseRuntimeState {
     $deployment=Get-Content -LiteralPath (Join-Path $app 'deployment.json') -Raw | ConvertFrom-Json
     Check ($deployment.version -eq $manifest.version -and $deployment.installMonitor -eq 1 -and (Test-Path -LiteralPath $deployment.ctlExecutable)) 'MSI includes the monitor and required CLI'
     Check ((Wizard @('--inspect')) -eq 0) 'Native provisioning inspection identifies a fresh empty installation without UI'
+    Check ((Wizard @('--resume')) -ne 0 -and (Get-EdgeServiceInfo EdgeCore).State -eq 'Stopped') 'Retained-identity startup refuses an empty unprovisioned service'
+    $unknown=Join-Path $data 'state/retained-startup-guard.txt'
+    'Unknown retained state must not trigger startup.' | Set-Content -LiteralPath $unknown
+    $unknownHash=(Get-FileHash -LiteralPath $unknown).Hash
+    Check ((Wizard @('--inspect')) -eq 12 -and (Wizard @('--resume')) -ne 0 -and (Get-EdgeServiceInfo EdgeCore).State -eq 'Stopped' -and (Get-FileHash -LiteralPath $unknown).Hash -eq $unknownHash) 'Retained-identity startup refuses and preserves unrecognized device state'
+    Remove-Item -LiteralPath $unknown
     Check (-not @(Get-Process -Name edge-core-monitor -ErrorAction SilentlyContinue).Count) 'Silent MSI installation does not launch a desktop monitor'
     $startup=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name IzumaEdgeCoreMonitor).IzumaEdgeCoreMonitor
     Check ($startup -eq ('"'+$deployment.monitorExecutable+'"')) 'Named-pipe-only monitor startup omits the invalid zero HTTP port'
@@ -164,7 +188,15 @@ public static class ReleaseRuntimeState {
         Stop-Service EdgeCore
         Check ((Wizard @('--inspect')) -in @(10,11)) 'Native wizard detects the imported identity or configured bundle'
         $command=(Get-EdgeServiceInfo EdgeCore).PathName
+        $before=@(Identity-Fingerprints)
         Check ((Wizard @('--production',$bundle)) -ne 0 -and (Get-EdgeServiceInfo EdgeCore).PathName -eq $command) 'Provisioning refuses to replace a configured identity'
+        Check ((Wizard @('--resume')) -eq 0 -and (Get-EdgeServiceInfo EdgeCore).State -eq 'Running') 'The desktop retained-identity backend starts the stopped service without new credentials'
+        Check ((Get-EdgeServiceInfo EdgeCore).PathName -eq $command) 'Retained-identity startup preserves the service command and data directory'
+        $resumedPid=(Get-EdgeServiceInfo EdgeCore).ProcessId
+        Check ((Wizard @('--resume')) -eq 0 -and (Get-EdgeServiceInfo EdgeCore).ProcessId -eq $resumedPid) 'Retained-identity startup leaves an already running service running without restart'
+        Stop-Service EdgeCore
+        $after=@(Identity-Fingerprints)
+        Check ($before.Count -gt 0 -and -not @(Compare-Object $before $after).Count) 'Synthetic device identity files remain unchanged after retained-identity startup'
     }
     Stop-TestMonitor
     $sentinel=Join-Path $data 'state/msi-runtime-state-sentinel.txt'
@@ -178,6 +210,14 @@ public static class ReleaseRuntimeState {
     Check ((Get-FileHash -LiteralPath $sentinel).Hash -eq $stateHash) 'Uninstall preserves device state'
     Msi '/i' 'reinstall-retained-state'
     Check ((Get-FileHash -LiteralPath $sentinel).Hash -eq $stateHash) 'MSI reinstalls with retained identity and no provisioning file'
+    Check ((Get-EdgeServiceInfo EdgeCore).State -eq 'Stopped') 'Silent reinstall with explicit STARTSERVICE=0 preserves the stopped service'
+    if ($DeveloperFixturePath) {
+        $before=@(Identity-Fingerprints)
+        Check ((Wizard @('--resume')) -eq 0 -and (Get-EdgeServiceInfo EdgeCore).State -eq 'Running') 'Retained-identity startup works after MSI uninstall and reinstall without reprovisioning'
+        Stop-Service EdgeCore
+        $after=@(Identity-Fingerprints)
+        Check ($before.Count -gt 0 -and -not @(Compare-Object $before $after).Count -and (Get-FileHash -LiteralPath $sentinel).Hash -eq $stateHash) 'Reinstalled service startup preserves the existing identity and device state sentinel'
+    }
     $release=Get-Content -LiteralPath (Join-Path $data 'service-release.json') -Raw | ConvertFrom-Json
     & $probe $release.directory *> (Join-Path $out 'runtime-probe-reinstalled.log')
     Check ($LASTEXITCODE -eq 0) 'Reinstalled Core dependencies still use the MSI-provided private runtime'
