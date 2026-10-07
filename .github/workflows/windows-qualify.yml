@@ -6,6 +6,10 @@ on:
         description: Windows MSI workflow run whose package job succeeded
         required: true
         type: string
+      fixture_ref:
+        description: Optional Core ref to regenerate synthetic test credentials
+        required: false
+        type: string
 permissions:
   contents: read
   actions: read
@@ -50,6 +54,39 @@ jobs:
           if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -cne $env:SIGNER_SUBJECT) { throw 'Unexpected MSI signature.' }
           Expand-Archive -LiteralPath "build/release/edge-core-$version-windows-x64-signed.zip" -DestinationPath build/core-package
           @{version=$version;msi=$msi[0].FullName;core="$pwd/build/core-package/edge-core-$version-windows-x64"} | ConvertTo-Json | Set-Content build/qualification-source.json -Encoding UTF8
+      - uses: actions/checkout@v4
+        if: inputs.fixture_ref != ''
+        with:
+          repository: PelionIoT/mbed-edge
+          ref: ${{ inputs.fixture_ref }}
+          path: build/core-source
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: inputs.fixture_ref != ''
+        with:
+          arch: x64
+      - uses: actions/cache/restore@v4
+        if: inputs.fixture_ref != ''
+        id: fixture-openssl
+        with:
+          path: |
+            build/core-source/build/openssl/install
+            build/core-source/build/openssl/openssl-3.5.9/LICENSE.txt
+          key: windows-2022-openssl-3.5.9-${{ env.VCToolsVersion }}-${{ hashFiles('build/core-source/windows/build-openssl.ps1') }}
+      - name: Build fixture OpenSSL SDK if needed
+        if: inputs.fixture_ref != '' && steps.fixture-openssl.outputs.cache-hit != 'true'
+        working-directory: build/core-source
+        run: ./windows/build-openssl.ps1 -OutputDirectory ./build/openssl
+      - name: Generate corrected synthetic credential fixture
+        if: inputs.fixture_ref != ''
+        run: |
+          cmake -E env --unset=Path --unset=PATH "Path=$env:PATH" MSBUILDDISABLENODEREUSE=1 cmake -S build/core-source/edge-tool/native -B build/fixture-native -DOPENSSL_ROOT_DIR="$pwd/build/core-source/build/openssl/install"
+          if ($LASTEXITCODE) { throw 'Native fixture configuration failed.' }
+          cmake -E env --unset=Path --unset=PATH "Path=$env:PATH" MSBUILDDISABLENODEREUSE=1 cmake --build build/fixture-native --config Release --parallel 2
+          if ($LASTEXITCODE) { throw 'Native fixture build failed.' }
+          New-Item -ItemType Directory build/fixture -Force | Out-Null
+          ./build/fixture-native/Release/edge-provision-tests.exe --write-fixture build/fixture/provisioning-fixture.c
+          if ($LASTEXITCODE) { throw 'Native fixture generation failed.' }
+          @{fixtureCommit=(git -C build/core-source rev-parse HEAD)} | ConvertTo-Json | Set-Content build/fixture/source.json
       - name: Qualify runtime absence, install, repair and reinstall
         run: |
           $source = Get-Content build/qualification-source.json -Raw | ConvertFrom-Json
