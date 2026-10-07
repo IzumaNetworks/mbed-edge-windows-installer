@@ -107,7 +107,7 @@ public static class ReleaseRuntimeState {
     $converter=Join-Path $release.directory 'edge-provision.exe'
     Check ((Test-Path -LiteralPath $converter) -and (Get-AuthenticodeSignature -LiteralPath $converter).Status -eq 'Valid') 'MSI deploys the signed portable native converter with its private runtime'
     if ($DeveloperFixturePath) {
-        $input=Join-Path $out 'arbitrary developer filename café.c'
+        $input=Join-Path $out ('arbitrary developer filename caf'+[char]0x00e9+'.c')
         Copy-Item -LiteralPath $DeveloperFixturePath -Destination $input
         $bundle=Join-Path $out 'synthetic.cbor'
         $exit=Converter $input $bundle 'converter.log'
