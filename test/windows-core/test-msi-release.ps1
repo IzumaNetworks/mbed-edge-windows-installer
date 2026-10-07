@@ -22,6 +22,16 @@ $manifest=Get-Content -LiteralPath (Join-Path $core 'package.json') -Raw | Conve
 if ((Get-EdgeVisualCppDeployment $manifest) -ne 'app-local') { throw 'The released MSI must include its app-local runtime.' }
 $result=[ordered]@{passed=$false;checks=@();error=$null;version=$manifest.version;sharedRuntimeRemoved=$false}
 $runtimeKey='HKLM:\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64'
+$monitorProcess=$null
+$monitorExecutable=$null
+function Stop-TestMonitor {
+    if (-not $script:monitorProcess) { return }
+    try {
+        $shutdown=Start-Process -FilePath $script:monitorExecutable -ArgumentList '--exit' -WindowStyle Hidden -PassThru -Wait
+        $shutdown.Dispose()
+        if (-not $script:monitorProcess.WaitForExit(10000)) { Stop-Process -Id $script:monitorProcess.Id -Force }
+    } finally { $script:monitorProcess.Dispose(); $script:monitorProcess=$null }
+}
 function Check([bool]$Condition,[string]$Text) { if (-not $Condition) { throw $Text }; $result.checks+=$Text; $Text | Add-Content -LiteralPath (Join-Path $out 'progress.log') }
 function Msi([string]$Action,[string]$Case) {
     $arguments=$Action+' "'+$msi+'" /qn /norestart /l*v "'+(Join-Path $out ($Case+'.log'))+'"'
@@ -97,6 +107,29 @@ public static class ReleaseRuntimeState {
     $deployment=Get-Content -LiteralPath (Join-Path $app 'deployment.json') -Raw | ConvertFrom-Json
     Check ($deployment.version -eq $manifest.version -and $deployment.installMonitor -eq 1 -and (Test-Path -LiteralPath $deployment.ctlExecutable)) 'MSI includes the monitor and required CLI'
     Check ((Wizard @('--inspect')) -eq 0) 'Native provisioning inspection identifies a fresh empty installation without UI'
+    Check (-not @(Get-Process -Name edge-core-monitor -ErrorAction SilentlyContinue).Count) 'Silent MSI installation does not launch a desktop monitor'
+    $startup=(Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name IzumaEdgeCoreMonitor).IzumaEdgeCoreMonitor
+    Check ($startup -eq ('"'+$deployment.monitorExecutable+'"')) 'Named-pipe-only monitor startup omits the invalid zero HTTP port'
+    $shell=New-Object -ComObject WScript.Shell
+    $shortcut=$shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('CommonPrograms')) 'Izuma Edge/Edge Core.lnk'))
+    Check ($shortcut.TargetPath -eq $deployment.monitorExecutable -and $shortcut.Arguments -eq '--show') 'The installed monitor shortcut has valid arguments with HTTP disabled'
+    $installer=New-Object -ComObject WindowsInstaller.Installer
+    $database=$installer.OpenDatabase($msi,0)
+    $view=$database.OpenView('SELECT `Condition`, `Sequence` FROM `InstallUISequence` WHERE `Action` = ''EdgeLaunchMonitor''')
+    $view.Execute(); $launch=$view.Fetch(); $view.Close()
+    Check ($null -ne $launch -and $launch.StringData(1).Contains('UILevel >= 5') -and $launch.StringData(1).Contains('INSTALLMONITOR') -and $launch.StringData(1).Contains('Monitor=3')) 'The compiled MSI gates monitor launch on full UI and monitor selection'
+    $view=$database.OpenView('SELECT `Sequence` FROM `InstallUISequence` WHERE `Action` = ''EdgeShowProvisioningWizard''')
+    $view.Execute(); $provisioning=$view.Fetch(); $view.Close()
+    Check ($launch.IntegerData(2) -gt $provisioning.IntegerData(1)) 'The compiled MSI launches the monitor after the provisioning step'
+    $view=$database.OpenView('SELECT `Target` FROM `CustomAction` WHERE `Action` = ''EdgeLaunchMonitor''')
+    $view.Execute(); $action=$view.Fetch(); $view.Close()
+    Check ($action.StringData(1) -eq 'WixUnelevatedShellExec') 'The compiled MSI uses the desktop user token to launch its monitor'
+    $monitorExecutable=$deployment.monitorExecutable
+    $monitorLog=Join-Path $out 'monitor-startup.log'
+    $monitorProcess=Start-Process -FilePath $deployment.monitorExecutable -ArgumentList ('--diagnostics "'+$monitorLog+'"') -WindowStyle Hidden -PassThru
+    $deadline=[DateTime]::UtcNow.AddSeconds(15)
+    do { if ((Test-Path -LiteralPath $monitorLog) -and (Get-Content -LiteralPath $monitorLog -Raw).Contains('tray=1')) { break }; Start-Sleep -Milliseconds 200 } while ([DateTime]::UtcNow -lt $deadline)
+    Check ((Test-Path -LiteralPath $monitorLog) -and -not $monitorProcess.HasExited -and (Get-Content -LiteralPath $monitorLog -Raw).Contains('tray=1')) 'The installed monitor starts with its normal startup arguments and enables the tray'
     $release=Get-Content -LiteralPath (Join-Path $data 'service-release.json') -Raw | ConvertFrom-Json
     foreach ($name in $manifest.visualCppDlls) {
         Check ((Get-FileHash -LiteralPath (Join-Path $release.directory $name)).Hash -eq (Get-FileHash -LiteralPath (Join-Path $core ('bin/'+$name))).Hash) "MSI deploys original Microsoft runtime DLL: $name"
@@ -120,11 +153,20 @@ public static class ReleaseRuntimeState {
         $bad=Join-Path $out 'malformed.c'; 'This is not a credential file' | Set-Content -LiteralPath $bad
         Check ((Wizard @('--developer',$bad)) -ne 0 -and (Wizard @('--inspect')) -eq 0) 'Invalid developer input leaves the fresh service unprovisioned'
         Check ((Wizard @('--developer',$input)) -eq 0) 'Native wizard backend converts developer credentials, imports the bundle, and starts the service'
+        $servicePid=(Get-EdgeServiceInfo EdgeCore).ProcessId
+        $deadline=[DateTime]::UtcNow.AddSeconds(15)
+        do {
+            $monitorStatus=Get-Content -LiteralPath $monitorLog -Raw
+            if ($monitorStatus.Contains('processId='+$servicePid+' tcpStatusEnabled=0 tcpStatusListening=0')) { break }
+            Start-Sleep -Milliseconds 200
+        } while ([DateTime]::UtcNow -lt $deadline)
+        Check ($monitorStatus.Contains('processId='+$servicePid+' tcpStatusEnabled=0 tcpStatusListening=0')) 'The running monitor reads the installed service status through its named pipe with HTTP disabled'
         Stop-Service EdgeCore
         Check ((Wizard @('--inspect')) -in @(10,11)) 'Native wizard detects the imported identity or configured bundle'
         $command=(Get-EdgeServiceInfo EdgeCore).PathName
         Check ((Wizard @('--production',$bundle)) -ne 0 -and (Get-EdgeServiceInfo EdgeCore).PathName -eq $command) 'Provisioning refuses to replace a configured identity'
     }
+    Stop-TestMonitor
     $sentinel=Join-Path $data 'state/msi-runtime-state-sentinel.txt'
     'Credential-free retained identity sentinel.' | Set-Content -LiteralPath $sentinel
     $stateHash=(Get-FileHash -LiteralPath $sentinel).Hash
@@ -144,6 +186,7 @@ public static class ReleaseRuntimeState {
     $result.passed=$true
 } catch { $result.error=$_.Exception.Message }
 finally {
+    Stop-TestMonitor
     if (Get-Service EdgeCore -ErrorAction SilentlyContinue) { try { Msi '/x' 'cleanup' } catch { } }
     $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $out 'results.json') -Encoding UTF8
 }

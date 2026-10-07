@@ -68,19 +68,22 @@ function Run-Helper {
     } finally { $process.Dispose() }
 }
 function Set-Integration {
-    param([string]$Executable,[bool]$Startup,[int]$Port=8080)
+    param([string]$Executable,[bool]$Startup,[ValidateRange(0,65535)][int]$Port=8080)
+    # Zero disables Core's optional HTTP listener; the monitor uses its named pipe.
+    # The monitor's CLI accepts positive HTTP ports only, so omit that override.
+    $portArgument=''; if ($Port -gt 0) { $portArgument=' --port '+$Port }
     $base=[Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine,[Microsoft.Win32.RegistryView]::Registry64)
     try {
         $run=$base.CreateSubKey('SOFTWARE\Microsoft\Windows\CurrentVersion\Run')
         try {
-            if ($Executable -and $Startup) { $run.SetValue($runName,'"'+$Executable+'" --port '+$Port,[Microsoft.Win32.RegistryValueKind]::String) }
+            if ($Executable -and $Startup) { $run.SetValue($runName,'"'+$Executable+'"'+$portArgument,[Microsoft.Win32.RegistryValueKind]::String) }
             else { $run.DeleteValue($runName,$false) }
         } finally { $run.Dispose() }
     } finally { $base.Dispose() }
     if ($Executable) {
         New-Item -ItemType Directory -Path (Split-Path -Parent $shortcut) -Force | Out-Null
         $shell=New-Object -ComObject WScript.Shell
-        $link=$shell.CreateShortcut($shortcut); $link.TargetPath=$Executable; $link.Arguments='--show --port '+$Port; $link.WorkingDirectory=Split-Path -Parent $Executable; $link.Save()
+        $link=$shell.CreateShortcut($shortcut); $link.TargetPath=$Executable; $link.Arguments='--show'+$portArgument; $link.WorkingDirectory=Split-Path -Parent $Executable; $link.Save()
     } elseif (Test-Path -LiteralPath $shortcut) { Remove-Item -LiteralPath $shortcut }
 }
 function Get-PolicyValue {

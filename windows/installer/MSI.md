@@ -5,7 +5,11 @@ x64, per-machine WiX MSI. The tray monitor is optional and selected by default;
 `izuma-edge-ctl.exe` and the portable native `edge-provision.exe` converter are
 always installed. In full desktop UI, a post-install wizard reports an existing
 identity or offers production bundle selection, developer C credential file
-selection, and **Don't provision right now**. Software-only installation leaves
+selection, and **Don't provision right now**. The selected tray monitor then
+starts in the desktop user's session without elevation. Silent and basic-UI
+installs launch neither the wizard nor the monitor. When the HTTP status listener
+is disabled, startup and shortcut commands omit the HTTP port override; monitor
+status continues to use the trusted named pipe. Software-only installation leaves
 EdgeCore stopped until device provisioning is supplied.
 
 Download and launch **`izuma-edge-VERSION-windows-x64.msi`**. This one signed MSI

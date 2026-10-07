@@ -149,6 +149,8 @@ $source=@"
     <Binary Id="EdgeActions" SourceFile="$(X $dll)" />
     <CustomAction Id="EdgePrepare" BinaryRef="EdgeActions" DllEntry="Prepare" Execute="immediate" Return="check" />
     <CustomAction Id="EdgeShowProvisioningWizard" BinaryRef="EdgeActions" DllEntry="ShowProvisioningWizard" Execute="immediate" Return="check" />
+    <Property Id="WixUnelevatedShellExecTarget" Value="[ProgramFiles64Folder]Izuma\EdgeSetup$suffix\monitor\$($manifest.version)\edge-core-monitor.exe" />
+    <CustomAction Id="EdgeLaunchMonitor" BinaryRef="Wix4UtilCA_X64" DllEntry="WixUnelevatedShellExec" Execute="immediate" Return="ignore" />
     <CustomAction Id="EdgeRollback" BinaryRef="EdgeActions" DllEntry="Rollback" Execute="rollback" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="EdgeApply" BinaryRef="EdgeActions" DllEntry="Apply" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="EdgeCommit" BinaryRef="EdgeActions" DllEntry="Commit" Execute="commit" Impersonate="no" Return="check" HideTarget="yes" />
@@ -157,6 +159,7 @@ $source=@"
     <CustomAction Id="EdgeCommitUninstall" BinaryRef="EdgeActions" DllEntry="CommitUninstall" Execute="commit" Impersonate="no" Return="check" HideTarget="yes" />
     <InstallUISequence>
       <Custom Action="EdgeShowProvisioningWizard" After="ExecuteAction" Condition="UILevel &gt;= 5 AND NOT REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="EdgeLaunchMonitor" After="EdgeShowProvisioningWizard" Condition="UILevel &gt;= 5 AND NOT REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE AND (INSTALLMONITOR=&quot;1&quot; OR (INSTALLMONITOR&lt;&gt;&quot;0&quot; AND (&amp;Monitor=3 OR (!Monitor=3 AND &amp;Monitor=-1))))" />
     </InstallUISequence>
     <InstallExecuteSequence>
       <Custom Action="EdgePrepare" After="CostFinalize" Condition="NOT UPGRADINGPRODUCTCODE" />
@@ -175,7 +178,7 @@ $wxs=Join-Path $out 'izuma-edge.wxs'
 $msi=Join-Path $out ($name+'.msi')
 @{version=$manifest.version;msi=$msi;wixSource=$wxs;customAction=$dll;provisioningWizard=$wizard;serviceName=$service;upgradeCode=$upgrade;coreSignerThumbprint=$coreSigner;bundleSignerThumbprint=$bundleSigner;qualification=[bool]$AllowUnsigned} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'msi-result.json') -Encoding UTF8
 if (-not $PrepareOnly) {
-    & $WixCommand build $wxs -arch x64 -ext WixToolset.UI.wixext -out $msi
+    & $WixCommand build $wxs -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -out $msi
     if ($LASTEXITCODE -ne 0) { throw 'WiX MSI compilation failed.' }
     Write-Output "Built unsigned qualification MSI: $msi"
 } else { Write-Output "Prepared $wxs. Sign $dll before WiX compilation; sign the MSI after compilation." }
