@@ -171,7 +171,13 @@ extern "C" __declspec(dllexport) UINT __stdcall ShowProvisioningWizard(MSIHANDLE
         // UI-sequence only, after the installation transaction succeeds.
         // No public property may redirect this elevated executable.
         const auto helper = join(knownFolder(FOLDERID_ProgramFilesX64),L"Izuma\\EdgeMsiHelpers" EDGE_FOLDER_SUFFIX L"\\" EDGE_VERSION L"\\edge-provisioning-wizard.exe");
+        // Fresh desktop installs resume a retained identity. Maintenance keeps the
+        // running/stopped state selected by deployment; explicit STARTSERVICE=0 wins.
+        const auto start = property(session,L"STARTSERVICE");
+        const bool keepStopped = start == L"0" || (start != L"1" &&
+            (!property(session,L"Installed").empty() || !property(session,L"WIX_UPGRADE_DETECTED").empty()));
         SHELLEXECUTEINFOW launch{}; launch.cbSize = sizeof(launch);
+        launch.lpParameters = keepStopped ? L"--keep-stopped" : nullptr;
         launch.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
         launch.lpVerb = L"runas"; launch.lpFile = helper.c_str(); launch.nShow = SW_SHOWNORMAL;
         if (!ShellExecuteExW(&launch) || !launch.hProcess) throw std::runtime_error("Wizard not started");

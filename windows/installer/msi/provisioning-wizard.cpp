@@ -75,21 +75,29 @@ static std::wstring storageName(const char* name) {
     return text;
 }
 struct Service { std::wstring command; DWORD state; };
-static Service serviceInfo() {
+static SC_HANDLE openService(DWORD access) {
     SC_HANDLE manager = OpenSCManagerW(nullptr,nullptr,SC_MANAGER_CONNECT);
     if (!manager) throw std::runtime_error("Service manager unavailable");
-    SC_HANDLE service = OpenServiceW(manager,EDGE_SERVICE_NAME,SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS);
+    SC_HANDLE service = OpenServiceW(manager,EDGE_SERVICE_NAME,access);
     CloseServiceHandle(manager);
     if (!service) throw std::runtime_error("Installed service unavailable");
+    return service;
+}
+static Service serviceInfo(SC_HANDLE service) {
     DWORD size = 0; QueryServiceConfigW(service,nullptr,0,&size);
     std::vector<BYTE> config(size);
-    if (!size || !QueryServiceConfigW(service,reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(config.data()),size,&size)) { CloseServiceHandle(service); throw std::runtime_error("Service configuration unavailable"); }
+    if (!size || !QueryServiceConfigW(service,reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(config.data()),size,&size)) { throw std::runtime_error("Service configuration unavailable"); }
     const auto* info = reinterpret_cast<LPQUERY_SERVICE_CONFIGW>(config.data());
     Service result{info->lpBinaryPathName,0};
-    if (_wcsicmp(info->lpServiceStartName,L"NT AUTHORITY\\LocalService") || result.command.find(L"--data-dir \""+dataRoot()+L"\\state\"") == std::wstring::npos || result.command.find(L"--service-name " EDGE_SERVICE_NAME L" ") == std::wstring::npos) { CloseServiceHandle(service); throw std::runtime_error("Service ownership mismatch"); }
+    if (_wcsicmp(info->lpServiceStartName,L"NT AUTHORITY\\LocalService") || result.command.find(L"--data-dir \""+dataRoot()+L"\\state\"") == std::wstring::npos || result.command.find(L"--service-name " EDGE_SERVICE_NAME L" ") == std::wstring::npos) { throw std::runtime_error("Service ownership mismatch"); }
     SERVICE_STATUS status{};
-    if (!QueryServiceStatus(service,&status)) { CloseServiceHandle(service); throw std::runtime_error("Service status unavailable"); }
-    result.state = status.dwCurrentState; CloseServiceHandle(service); return result;
+    if (!QueryServiceStatus(service,&status)) { throw std::runtime_error("Service status unavailable"); }
+    result.state = status.dwCurrentState; return result;
+}
+static Service serviceInfo() {
+    SC_HANDLE service = openService(SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS);
+    try { const auto result = serviceInfo(service); CloseServiceHandle(service); return result; }
+    catch (...) { CloseServiceHandle(service); throw; }
 }
 // Codes are also used by credential-free release qualification.
 enum class Identity { Empty = 0, Existing = 10, Pending = 11, Retained = 12, Unavailable = 13 };
@@ -109,6 +117,33 @@ static Identity inspect() {
     if (retained || service.command.find(L"--reset-storage") != std::wstring::npos) return Identity::Retained;
     if (service.state != SERVICE_STOPPED) return Identity::Unavailable;
     return Identity::Empty;
+}
+// Reuse the configured identity without importing credentials or changing SCM configuration.
+// Both the desktop wizard and credential-free qualification call this path.
+static void resume() {
+    const auto identity = inspect();
+    if (identity != Identity::Existing && identity != Identity::Pending) throw std::runtime_error("No configured identity to resume");
+    SC_HANDLE service = openService(SERVICE_QUERY_CONFIG | SERVICE_QUERY_STATUS | SERVICE_START);
+    try {
+        (void)serviceInfo(service); // Recheck ownership on the handle being started.
+        const ULONGLONG deadline = GetTickCount64()+30000;
+        bool started = false;
+        for (;;) {
+            SERVICE_STATUS status{};
+            if (!QueryServiceStatus(service,&status)) throw std::runtime_error("Service status unavailable");
+            if (status.dwCurrentState == SERVICE_RUNNING) break;
+            if (GetTickCount64() >= deadline) throw std::runtime_error("Service startup timed out");
+            if (status.dwCurrentState == SERVICE_STOPPED) {
+                if (started) throw std::runtime_error("Service stopped during startup");
+                if (!StartServiceW(service,0,nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) throw std::runtime_error("Service could not start");
+                started = true;
+            } else if (status.dwCurrentState != SERVICE_START_PENDING && status.dwCurrentState != SERVICE_STOP_PENDING) {
+                throw std::runtime_error("Service state needs attention");
+            }
+            Sleep(200);
+        }
+        CloseServiceHandle(service);
+    } catch (...) { CloseServiceHandle(service); throw; }
 }
 static void message(const wchar_t* title, const wchar_t* body, PCWSTR icon = TD_INFORMATION_ICON) {
     int button = 0;
@@ -161,7 +196,7 @@ static std::wstring privateStage() {
     SECURITY_ATTRIBUTES sa{sizeof(sa),sd,FALSE}; const BOOL made = CreateDirectoryW(path.c_str(),&sa); LocalFree(sd);
     if (!made) throw std::runtime_error("Private directory unavailable"); return path;
 }
-static bool provision(const std::wstring& input, bool developer) {
+static bool provision(const std::wstring& input, bool developer, bool startService = true) {
     if (inspect() != Identity::Empty) throw std::runtime_error("Existing state must be preserved");
     std::wstring stage, bundle = input; bool result = false;
     try {
@@ -171,10 +206,12 @@ static bool provision(const std::wstring& input, bool developer) {
         }
         wchar_t system[MAX_PATH]{};
         if (!GetSystemDirectoryW(system,MAX_PATH)) throw std::runtime_error("System directory unavailable");
-        result = run(std::wstring(system)+L"\\WindowsPowerShell\\v1.0\\powershell.exe",{
+        std::vector<std::wstring> arguments{
             L"-NoProfile",L"-NonInteractive",L"-ExecutionPolicy",L"Bypass",L"-File",payload()+L"\\core\\scripts\\provision-service.ps1",
             L"-ServiceName",EDGE_SERVICE_NAME,L"-DataDirectory",dataRoot(),L"-ProvisioningFile",bundle,
-            L"-ProvisioningMode",developer ? L"developer" : L"production",L"-Start"});
+            L"-ProvisioningMode",developer ? L"developer" : L"production"};
+        if (startService) arguments.push_back(L"-Start");
+        result = run(std::wstring(system)+L"\\WindowsPowerShell\\v1.0\\powershell.exe",arguments);
     } catch (...) {
         if (!stage.empty()) { DeleteFileW(bundle.c_str()); RemoveDirectoryW(stage.c_str()); }
         throw;
@@ -182,11 +219,24 @@ static bool provision(const std::wstring& input, bool developer) {
     if (!stage.empty()) { DeleteFileW(bundle.c_str()); RemoveDirectoryW(stage.c_str()); }
     return result;
 }
-static void wizard() {
+static void wizard(bool startService) {
     for (;;) {
         const auto identity = inspect();
-        if (identity == Identity::Existing) { message(L"Existing device identity found",L"Izuma Edge will continue to use the existing device identity. No new provisioning file is needed."); return; }
-        if (identity == Identity::Pending) { message(L"Provisioning is already configured",L"Izuma Edge will use the provisioning bundle already configured for this service. Bootstrap completes when cloud connectivity is available."); return; }
+        if (identity == Identity::Existing || identity == Identity::Pending) {
+            const wchar_t* title = identity == Identity::Existing ? L"Existing device identity found" : L"Provisioning is already configured";
+            if (!startService) {
+                message(title,L"Izuma Edge will reuse the existing identity or configured bundle. Automatic service startup was skipped to preserve your installation options."); return;
+            }
+            try {
+                resume();
+                message(title,identity == Identity::Existing
+                    ? L"The Izuma Edge service is running and will continue to use the existing device identity. No new provisioning file is needed."
+                    : L"The Izuma Edge service is running with its existing provisioning bundle. Bootstrap completes when cloud connectivity is available.");
+            } catch (...) {
+                message(title,L"The existing identity or configured bundle was preserved, but Edge Core could not be started. Use Start Edge Core in the monitor or ask an administrator to inspect the service logs.",TD_WARNING_ICON);
+            }
+            return;
+        }
         if (identity != Identity::Empty) { message(L"Existing device state needs attention",L"Device state was preserved, but a complete identity could not be confirmed. New provisioning will not replace it. An administrator can inspect the service before continuing.",TD_WARNING_ICON); return; }
         const TASKDIALOG_BUTTON buttons[] = {
             {101,L"Production flow\nI have a production bundle"},
@@ -202,8 +252,10 @@ static void wizard() {
         const bool developer = selected == 102; const auto input = choose(developer);
         if (input.empty()) continue;
         try {
-            if (!provision(input,developer)) throw std::runtime_error("Provisioning activation failed");
-            message(L"Provisioning configured",L"The bundle was imported and the Izuma Edge service started. Cloud bootstrap completes when connectivity is available."); return;
+            if (!provision(input,developer,startService)) throw std::runtime_error("Provisioning activation failed");
+            message(L"Provisioning configured",startService
+                ? L"The bundle was imported and the Izuma Edge service started. Cloud bootstrap completes when connectivity is available."
+                : L"The bundle was imported. Automatic service startup was skipped to preserve your installation options."); return;
         } catch (...) {
             message(L"Provisioning could not be completed",L"Check that the selected file is a valid provisioning bundle or portal developer credential file, then try again. Installation is complete and existing state was preserved. If a bundle was already configured, an administrator can inspect the provisioning journal.",TD_WARNING_ICON);
         }
@@ -216,20 +268,23 @@ int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
     const bool inspection = argv && argc == 2 && !wcscmp(argv[1],L"--inspect");
     const bool import = argv && argc == 3 && (!wcscmp(argv[1],L"--developer") || !wcscmp(argv[1],L"--production"));
     const bool developer = import && !wcscmp(argv[1],L"--developer");
+    const bool resuming = argv && argc == 2 && !wcscmp(argv[1],L"--resume");
+    const bool keepStopped = argv && argc == 2 && !wcscmp(argv[1],L"--keep-stopped");
     const std::wstring input = import ? argv[2] : L"";
-    const bool headless = argc > 1;
+    const bool headless = argc > 1 && !keepStopped;
     if (argv) LocalFree(argv);
     int result = 0;
     try {
         if (inspection) result = static_cast<int>(inspect());
         else if (import) result = provision(input,developer) ? 0 : 1;
+        else if (resuming) resume();
         else if (headless) result = 2;
         else {
             SID_IDENTIFIER_AUTHORITY authority = SECURITY_NT_AUTHORITY; PSID admin = nullptr; BOOL elevated = FALSE;
             if (!AllocateAndInitializeSid(&authority,2,SECURITY_BUILTIN_DOMAIN_RID,DOMAIN_ALIAS_RID_ADMINS,0,0,0,0,0,0,&admin)) throw std::runtime_error("Administrator check failed");
             const BOOL checked = CheckTokenMembership(nullptr,admin,&elevated); FreeSid(admin);
             if (!checked || !elevated) throw std::runtime_error("Administrator access needed");
-            wizard();
+            wizard(!keepStopped);
         }
     } catch (...) {
         result = static_cast<int>(Identity::Unavailable);

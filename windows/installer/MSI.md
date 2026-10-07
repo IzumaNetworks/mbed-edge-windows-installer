@@ -10,7 +10,8 @@ starts in the desktop user's session without elevation. Silent and basic-UI
 installs launch neither the wizard nor the monitor. When the HTTP status listener
 is disabled, startup and shortcut commands omit the HTTP port override; monitor
 status continues to use the trusted named pipe. Software-only installation leaves
-EdgeCore stopped until device provisioning is supplied.
+EdgeCore stopped until device provisioning is supplied. A fresh desktop install
+with a retained identity starts Core automatically and reports that it is reused.
 
 Download and launch **`izuma-edge-VERSION-windows-x64.msi`**. This one signed MSI
 contains Edge Core, the optional monitor, required CLI and unmodified
@@ -36,7 +37,8 @@ the feature tree. Silent options are `INSTALLMONITOR`, `MONITORUSERCONTROL`,
 standard-user control off, monitor startup on, and service stopped. Upgrades and
 repairs preserve existing control and monitor startup choices unless an option
 is explicitly supplied, and preserve the service's running state. `STARTSERVICE`
-controls first installation. The monitor feature selection also survives upgrades.
+controls first installation; explicit `STARTSERVICE=0` also suppresses startup
+in the desktop wizard. The monitor feature selection also survives upgrades.
 
 Optional first-install provisioning uses `PROVISIONING="C:\path\device.cbor"`
 and `PROVISIONINGMODE=developer` or `production`; the default is `deferred` with
