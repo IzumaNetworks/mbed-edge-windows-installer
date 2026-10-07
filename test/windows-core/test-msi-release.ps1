@@ -4,7 +4,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$MsiPath,
     [Parameter(Mandatory=$true)][string]$CorePackageDirectory,
-    [Parameter(Mandatory=$true)][string]$OutputDirectory
+    [Parameter(Mandatory=$true)][string]$OutputDirectory,
+    [string]$DeveloperFixturePath
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -31,6 +32,11 @@ function Msi([string]$Action,[string]$Case) {
 function Runtime-Detected {
     $runtime=Get-ItemProperty -LiteralPath $runtimeKey -ErrorAction SilentlyContinue
     return [bool]($runtime -and $runtime.PSObject.Properties['Installed'] -and $runtime.Installed)
+}
+function Wizard([string[]]$Arguments) {
+    $helper=Join-Path $env:ProgramFiles ('Izuma/EdgeMsiHelpers/'+$manifest.version+'/edge-provisioning-wizard.exe')
+    $process=Start-Process -FilePath $helper -ArgumentList (ConvertTo-EdgeNativeArguments $Arguments) -WindowStyle Hidden -Wait -PassThru
+    try { return $process.ExitCode } finally { $process.Dispose() }
 }
 try {
     # Build a static-runtime process before removing the developer runtime.
@@ -73,6 +79,7 @@ public static class ReleaseRuntimeState {
     $data=Join-Path $env:ProgramData 'Izuma/EdgeCore'
     $deployment=Get-Content -LiteralPath (Join-Path $app 'deployment.json') -Raw | ConvertFrom-Json
     Check ($deployment.version -eq $manifest.version -and $deployment.installMonitor -eq 1 -and (Test-Path -LiteralPath $deployment.ctlExecutable)) 'MSI includes the monitor and required CLI'
+    Check ((Wizard @('--inspect')) -eq 0) 'Native provisioning inspection identifies a fresh empty installation without UI'
     $release=Get-Content -LiteralPath (Join-Path $data 'service-release.json') -Raw | ConvertFrom-Json
     foreach ($name in $manifest.visualCppDlls) {
         Check ((Get-FileHash -LiteralPath (Join-Path $release.directory $name)).Hash -eq (Get-FileHash -LiteralPath (Join-Path $core ('bin/'+$name))).Hash) "MSI deploys original Microsoft runtime DLL: $name"
@@ -80,9 +87,31 @@ public static class ReleaseRuntimeState {
     & $probe $release.directory *> (Join-Path $out 'runtime-probe.log')
     Check ($LASTEXITCODE -eq 0) 'Native loader resolves CRT, libevent and OpenSSL from the installed private directory'
     Check (-not (Runtime-Detected)) 'MSI succeeds without installing a shared runtime or launching its redistributable'
+    $converter=Join-Path $release.directory 'edge-provision.exe'
+    Check ((Test-Path -LiteralPath $converter) -and (Get-AuthenticodeSignature -LiteralPath $converter).Status -eq 'Valid') 'MSI deploys the signed portable native converter with its private runtime'
+    if ($DeveloperFixturePath) {
+        $input=Join-Path $out 'arbitrary developer filename café.c'
+        Copy-Item -LiteralPath $DeveloperFixturePath -Destination $input
+        $bundle=Join-Path $out 'synthetic.cbor'
+        & $converter convert-developer --input $input --output $bundle *> (Join-Path $out 'converter.log')
+        Check ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $bundle)) 'Installed native converter accepts an arbitrary Unicode developer credential filename'
+        $bundleHash=(Get-FileHash -LiteralPath $bundle).Hash
+        & $converter convert-developer --input $input --output $bundle *> (Join-Path $out 'converter-overwrite.log')
+        Check ($LASTEXITCODE -ne 0 -and (Get-FileHash -LiteralPath $bundle).Hash -eq $bundleHash) 'Native conversion refuses to overwrite an existing bundle'
+        $acl=Get-Acl -LiteralPath $bundle
+        Check ($acl.AreAccessRulesProtected -and -not ($acl.Access | Where-Object {$_.IdentityReference.Value -match 'Users$|Everyone|Authenticated Users'})) 'Converted private key material has a protected private ACL'
+        $bad=Join-Path $out 'malformed.c'; 'This is not a credential file' | Set-Content -LiteralPath $bad
+        Check ((Wizard @('--developer',$bad)) -ne 0 -and (Wizard @('--inspect')) -eq 0) 'Invalid developer input leaves the fresh service unprovisioned'
+        Check ((Wizard @('--developer',$input)) -eq 0) 'Native wizard backend converts developer credentials, imports the bundle, and starts the service'
+        Stop-Service EdgeCore
+        Check ((Wizard @('--inspect')) -in @(10,11)) 'Native wizard detects the imported identity or configured bundle'
+        $command=(Get-EdgeServiceInfo EdgeCore).PathName
+        Check ((Wizard @('--production',$bundle)) -ne 0 -and (Get-EdgeServiceInfo EdgeCore).PathName -eq $command) 'Provisioning refuses to replace a configured identity'
+    }
     $sentinel=Join-Path $data 'state/msi-runtime-state-sentinel.txt'
     'Credential-free retained identity sentinel.' | Set-Content -LiteralPath $sentinel
     $stateHash=(Get-FileHash -LiteralPath $sentinel).Hash
+    if (-not $DeveloperFixturePath) { Check ((Wizard @('--inspect')) -eq 12) 'Unrecognized retained state is preserved rather than treated as an empty identity' }
     Msi '/fa' 'repair'
     Check ((Get-FileHash -LiteralPath $sentinel).Hash -eq $stateHash) 'Repair preserves retained device state'
     Msi '/x' 'uninstall'

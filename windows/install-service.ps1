@@ -194,6 +194,7 @@ try {
         }
     }
     Copy-Item -LiteralPath (Join-Path $source 'edge-core.exe') -Destination $install
+    if (Test-Path -LiteralPath (Join-Path $source 'edge-provision.exe')) { Copy-Item -LiteralPath (Join-Path $source 'edge-provision.exe') -Destination $install }
     Get-ChildItem -LiteralPath $source -Filter '*.dll' -File | Copy-Item -Destination $install
     if ($inputBundle) { [void](Write-EdgeProvisioningInput $inputBundle $provisionDirectory $sid $ProvisioningMode) }
     Invoke-ServiceControl -Arguments @('failure',$ServiceName,'reset=','86400','actions=','restart/5000/restart/30000/none/0')

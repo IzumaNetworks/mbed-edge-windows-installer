@@ -44,6 +44,9 @@ $binary=Join-Path $build 'bin/Release'
 foreach ($name in @('edge-core.exe','event.dll','event_core.dll')) {
     Copy-Item -LiteralPath (Join-Path $binary $name) -Destination (Join-Path $stage 'bin')
 }
+$converter=Join-Path $binary 'edge-provision.exe'
+if (-not (Test-Path -LiteralPath $converter -PathType Leaf)) { throw 'Build the native edge-provision command before packaging.' }
+Copy-Item -LiteralPath $converter -Destination (Join-Path $stage 'bin')
 foreach ($pattern in @('libcrypto-3*.dll','libssl-3*.dll')) {
     $files=@(Get-ChildItem -LiteralPath $binary -Filter $pattern -File)
     if ($files.Count -ne 1) { throw "Expected one $pattern in Release output." }

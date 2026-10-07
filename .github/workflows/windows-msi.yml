@@ -30,6 +30,27 @@ permissions:
   contents: read
 
 jobs:
+  portable-converter:
+    if: inputs.core_run_id == ''
+    strategy:
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: PelionIoT/mbed-edge
+          ref: ${{ inputs.core_ref }}
+      - name: Build and test portable native converter
+        shell: bash
+        run: |
+          if [ "${RUNNER_OS}" = "macOS" ]; then
+            cmake -S edge-tool/native -B build/provision -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          else
+            cmake -S edge-tool/native -B build/provision
+          fi
+          cmake --build build/provision --parallel 2
+          ctest --test-dir build/provision --output-on-failure
   package:
     runs-on: windows-2022
     outputs:
@@ -168,6 +189,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Native Core test build failed.' }
           ctest --test-dir build/windows-x64 -C Release --output-on-failure
           if ($LASTEXITCODE -ne 0) { throw 'Native Core tests failed.' }
+          ./build/windows-x64/bin/Release/edge-provision-tests.exe --write-fixture build/provisioning-fixture.c
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic provisioning fixture generation failed.' }
+      - uses: actions/upload-artifact@v4
+        if: inputs.core_run_id == ''
+        with:
+          name: izuma-edge-synthetic-provisioning-fixture
+          path: build/core-source/build/provisioning-fixture.c
+          if-no-files-found: error
+          retention-days: 1
       - name: Stage Core runtime
         if: inputs.core_run_id == ''
         env:
@@ -175,7 +205,7 @@ jobs:
           CORE_COMMIT: ${{ steps.source.outputs.commit }}
         run: |
           $stage = New-Item -ItemType Directory build/core-runtime
-          foreach ($name in @('edge-core.exe','event.dll','event_core.dll','libcrypto-3-x64.dll','libssl-3-x64.dll')) {
+          foreach ($name in @('edge-core.exe','edge-provision.exe','event.dll','event_core.dll','libcrypto-3-x64.dll','libssl-3-x64.dll')) {
             Copy-Item -LiteralPath "build/core-source/build/windows-x64/bin/Release/$name" -Destination $stage
           }
           Copy-Item build/core-source/LICENSE "$stage/edge-LICENSE.txt"
@@ -234,7 +264,7 @@ jobs:
         run: |
           ./build/core-source/windows/verify-signatures.ps1 -Path build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT
           New-Item -ItemType Directory build/core/bin/Release,build/licenses -Force | Out-Null
-          foreach ($name in @('edge-core.exe','event.dll','event_core.dll','libcrypto-3-x64.dll','libssl-3-x64.dll')) { Copy-Item -LiteralPath "build/core-runtime/$name" -Destination build/core/bin/Release }
+          foreach ($name in @('edge-core.exe','edge-provision.exe','event.dll','event_core.dll','libcrypto-3-x64.dll','libssl-3-x64.dll')) { Copy-Item -LiteralPath "build/core-runtime/$name" -Destination build/core/bin/Release }
           @('BYOC_MODE:BOOL=ON','DEVELOPER_MODE:BOOL=OFF','MBED_CLOUD_CLIENT_USE_OPENSSL:BOOL=ON') | Set-Content build/core/CMakeCache.txt
           Copy-Item build/core-runtime/openssl-LICENSE.txt build/licenses/LICENSE.txt
           ./windows/build-package.ps1 -BuildDirectory build/core -EdgeRepositoryDirectory build/core-source -Version $env:RELEASE_VERSION -OutputDirectory build/package -VisualCppDeployment app-local -OpenSSLSourceDirectory build/licenses
@@ -275,13 +305,15 @@ jobs:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\build\msi\native\Release\edge_msi_actions.dll
+          files: |
+            ${{ github.workspace }}\build\msi\native\Release\edge_msi_actions.dll
+            ${{ github.workspace }}\build\msi\native\Release\edge-provisioning-wizard.exe
           exclude-environment-credential: true
       - name: Compile MSI with signed contents
         env:
           SIGNER_SUBJECT: ${{ vars.AZURE_SIGNER_SUBJECT }}
         run: |
-          ./build/core-source/windows/verify-signatures.ps1 -Path build/msi/native/Release/edge_msi_actions.dll -ExpectedSubject $env:SIGNER_SUBJECT
+          ./build/core-source/windows/verify-signatures.ps1 -Path build/msi/native/Release/edge_msi_actions.dll,build/msi/native/Release/edge-provisioning-wizard.exe -ExpectedSubject $env:SIGNER_SUBJECT
           $result = Get-Content build/msi/msi-result.json -Raw | ConvertFrom-Json
           ./build/wix/wix.exe build $result.wixSource -arch x64 -ext WixToolset.UI.wixext -out $result.msi
           if ($LASTEXITCODE -ne 0) { throw 'MSI compilation failed.' }
@@ -304,9 +336,10 @@ jobs:
         run: |
           New-Item -ItemType Directory build/release | Out-Null
           $msi = (Get-Content build/msi/msi-result.json -Raw | ConvertFrom-Json).msi
-          ./build/core-source/windows/verify-signatures.ps1 -Path $msi,build/core-runtime/edge-core.exe,build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT -ReportPath build/release/signatures.json
+          ./build/core-source/windows/verify-signatures.ps1 -Path $msi,build/core-runtime/edge-core.exe,build/core-runtime/edge-provision.exe,build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -ExpectedSubject $env:SIGNER_SUBJECT -ReportPath build/release/signatures.json
           Copy-Item -LiteralPath $msi -Destination build/release
           Copy-Item build/core-runtime/edge-core.exe -Destination build/release
+          Copy-Item build/core-runtime/edge-provision.exe -Destination build/release
           Copy-Item build/monitor/build/bin/Release/edge-core-monitor.exe,build/monitor/build/bin/Release/izuma-edge-ctl.exe -Destination build/release
           Compress-Archive -LiteralPath "build/package/edge-core-$env:RELEASE_VERSION-windows-x64" -DestinationPath "build/release/edge-core-$env:RELEASE_VERSION-windows-x64-signed.zip"
           @{coreRunId=$env:CORE_RUN_ID;coreRunRepository=$env:CORE_RUN_REPOSITORY;coreCommit=$env:CORE_COMMIT;installerCommit=$env:GITHUB_SHA;monitorCommit=(git -C build/monitor rev-parse HEAD)} | ConvertTo-Json | Set-Content build/release/source.json -Encoding UTF8
@@ -319,7 +352,8 @@ jobs:
           retention-days: 30
 
   qualify-msi:
-    needs: package
+    needs: [package, portable-converter]
+    if: always() && needs.package.result == 'success' && (needs.portable-converter.result == 'success' || needs.portable-converter.result == 'skipped')
     runs-on: windows-2022
     defaults:
       run:
@@ -330,12 +364,19 @@ jobs:
         with:
           name: izuma-edge-windows-x64-signed
           path: build/release
+      - uses: actions/download-artifact@v4
+        if: inputs.core_run_id == ''
+        with:
+          name: izuma-edge-synthetic-provisioning-fixture
+          path: build/fixture
       - name: Test the single MSI without a shared runtime
         env:
           RELEASE_VERSION: ${{ needs.package.outputs.version }}
         run: |
           Expand-Archive -LiteralPath "build/release/edge-core-$env:RELEASE_VERSION-windows-x64-signed.zip" -DestinationPath build/core-package
-          ./test/windows-core/test-msi-release.ps1 -MsiPath "build/release/izuma-edge-$env:RELEASE_VERSION-windows-x64.msi" -CorePackageDirectory "build/core-package/edge-core-$env:RELEASE_VERSION-windows-x64" -OutputDirectory build/msi-tests
+          $extra=@{}
+          if (Test-Path build/fixture/provisioning-fixture.c) { $extra.DeveloperFixturePath="$pwd/build/fixture/provisioning-fixture.c" }
+          ./test/windows-core/test-msi-release.ps1 -MsiPath "build/release/izuma-edge-$env:RELEASE_VERSION-windows-x64.msi" -CorePackageDirectory "build/core-package/edge-core-$env:RELEASE_VERSION-windows-x64" -OutputDirectory build/msi-tests @extra
       - name: Retain MSI qualification logs
         if: always()
         uses: actions/upload-artifact@v4

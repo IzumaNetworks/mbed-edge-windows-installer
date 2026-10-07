@@ -5,6 +5,7 @@
 #include <msiquery.h>
 #include <wincrypt.h>
 #include <shlobj.h>
+#include <shellapi.h>
 #include <string>
 #include <vector>
 #include <stdexcept>
@@ -75,6 +76,8 @@ extern "C" __declspec(dllexport) UINT __stdcall Prepare(MSIHANDLE session) {
         // A public MSI directory property must never redirect SYSTEM script execution.
         if (_wcsicmp(property(session, L"PAYLOADDIR").c_str(), (payload + L"\\").c_str()) != 0) throw std::runtime_error("Payload directory cannot be overridden");
         const auto programs = knownFolder(FOLDERID_ProgramFilesX64);
+        const auto wizardDirectory = join(programs,L"Izuma\\EdgeMsiHelpers" EDGE_FOLDER_SUFFIX L"\\" EDGE_VERSION);
+        if (_wcsicmp(property(session,L"WIZARDDIR").c_str(),(wizardDirectory+L"\\").c_str()) != 0) throw std::runtime_error("Wizard directory cannot be overridden");
         const auto data = knownFolder(FOLDERID_ProgramData);
         std::wstring mode = property(session, L"PROVISIONINGMODE");
         if (mode.empty()) mode = L"deferred";
@@ -162,3 +165,21 @@ extern "C" __declspec(dllexport) UINT __stdcall Commit(MSIHANDLE s) { return run
 extern "C" __declspec(dllexport) UINT __stdcall Uninstall(MSIHANDLE s) { return run(s, L"Uninstall"); }
 extern "C" __declspec(dllexport) UINT __stdcall UndoUninstall(MSIHANDLE s) { return run(s, L"UndoUninstall"); }
 extern "C" __declspec(dllexport) UINT __stdcall CommitUninstall(MSIHANDLE s) { return run(s, L"CommitUninstall"); }
+
+extern "C" __declspec(dllexport) UINT __stdcall ShowProvisioningWizard(MSIHANDLE session) {
+    try {
+        // UI-sequence only, after the installation transaction succeeds.
+        // No public property may redirect this elevated executable.
+        const auto helper = join(knownFolder(FOLDERID_ProgramFilesX64),L"Izuma\\EdgeMsiHelpers" EDGE_FOLDER_SUFFIX L"\\" EDGE_VERSION L"\\edge-provisioning-wizard.exe");
+        SHELLEXECUTEINFOW launch{}; launch.cbSize = sizeof(launch);
+        launch.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+        launch.lpVerb = L"runas"; launch.lpFile = helper.c_str(); launch.nShow = SW_SHOWNORMAL;
+        if (!ShellExecuteExW(&launch) || !launch.hProcess) throw std::runtime_error("Wizard not started");
+        WaitForSingleObject(launch.hProcess,INFINITE); CloseHandle(launch.hProcess);
+    } catch (...) {
+        log(session,L"Izuma Edge is installed. Provisioning was deferred because its administrator wizard could not be started.");
+        MessageBoxW(nullptr,L"Izuma Edge is installed. Provisioning was deferred because administrator access was not granted. You can run the installed provisioning wizard later.",L"Izuma Edge provisioning",MB_OK | MB_ICONINFORMATION);
+    }
+    // Provisioning is optional after commit. Cancellation cannot undo installation.
+    return ERROR_SUCCESS;
+}

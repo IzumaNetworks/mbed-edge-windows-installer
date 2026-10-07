@@ -108,7 +108,7 @@ try {
     Watch-ReleaseWorkflow $installerRepo $msi
     $artifacts=Join-Path $out 'artifacts'
     [void](Invoke-Gh @('run','download',[string]$msi.id,'--repo',$installerRepo,'--name',$plan.artifact,'--dir',$artifacts))
-    foreach ($name in @('edge-core.exe','edge-core-monitor.exe','izuma-edge-ctl.exe','signatures.json','source.json','SHA256SUMS.txt')) {
+    foreach ($name in @('edge-core.exe','edge-provision.exe','edge-core-monitor.exe','izuma-edge-ctl.exe','signatures.json','source.json','SHA256SUMS.txt')) {
         if (-not (Test-Path -LiteralPath (Join-Path $artifacts $name) -PathType Leaf)) { throw "Missing release artifact: $name" }
     }
     $msis=@(Get-ChildItem -LiteralPath $artifacts -Filter "izuma-edge-$Version-windows-x64.msi" -File)

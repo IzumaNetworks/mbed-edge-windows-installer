@@ -41,6 +41,7 @@ if ($QualificationId) {
     $suffix='-qualification-'+$QualificationId; $family+='.'+$QualificationId
     $product+=' qualification '+$QualificationId
 }
+if (-not (Test-Path -LiteralPath (Join-Path $bundle 'core/bin/edge-provision.exe') -PathType Leaf)) { throw 'The MSI requires a Core package containing the native developer converter.' }
 New-Item -ItemType Directory -Path $out | Out-Null
 function Id {
     param([string]$Value)
@@ -59,6 +60,8 @@ $native=Join-Path $out 'native'
 Invoke-CMake @('-S',(Join-Path $PSScriptRoot 'installer/msi'),'-B',$native,'-G','Visual Studio 17 2022','-A','x64',"-DEDGE_SERVICE_NAME=$service","-DEDGE_FOLDER_SUFFIX=$suffix","-DEDGE_VERSION=$($manifest.version)","-DEDGE_UNSIGNED=$([int][bool]$AllowUnsigned)","-DEDGE_CORE_SIGNER=$coreSigner","-DEDGE_BUNDLE_SIGNER=$bundleSigner")
 Invoke-CMake @('--build',$native,'--config','Release','--parallel','2')
 $dll=Join-Path $native 'Release/edge_msi_actions.dll'
+$wizard=Join-Path $native 'Release/edge-provisioning-wizard.exe'
+$wizardGuid=Guid-For ($family+'/'+$manifest.version+'/provisioning-wizard')
 $upgrade=Guid-For $family
 $componentRefs=New-Object Collections.Generic.List[string]
 $directoryXml=New-Object Text.StringBuilder
@@ -116,6 +119,13 @@ $source=@"
     <Launch Condition="NOT DISABLEROLLBACK" Message="Windows Installer rollback must be enabled for Izuma Edge deployment." />
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="IZUMADIR" Name="Izuma">
+        <Directory Id="MSIHELPERSDIR" Name="EdgeMsiHelpers$suffix">
+          <Directory Id="WIZARDDIR" Name="$($manifest.version)">
+            <Component Id="ProvisioningWizard" Guid="$wizardGuid" Bitness="always64">
+              <File Id="ProvisioningWizardExe" Source="$(X $wizard)" KeyPath="yes" />
+            </Component>
+          </Directory>
+        </Directory>
         <Directory Id="MSICACHEDIR" Name="EdgeMsiPayload$suffix">
           <Directory Id="PAYLOADDIR" Name="$($manifest.version)">
             $directoryXml
@@ -127,6 +137,7 @@ $source=@"
       </Directory>
     </StandardDirectory>
     <Feature Id="Core" Title="Edge Core service and command-line control" Level="1" AllowAbsent="no">
+      <ComponentRef Id="ProvisioningWizard" />
       $refs
       <Feature Id="Monitor" Title="Edge Core tray monitor" Description="Install the optional monitor and start it at user sign-in." Level="1">
         <ComponentRef Id="MonitorSelection" />
@@ -137,12 +148,16 @@ $source=@"
     $($brandingXml -join "`n")
     <Binary Id="EdgeActions" SourceFile="$(X $dll)" />
     <CustomAction Id="EdgePrepare" BinaryRef="EdgeActions" DllEntry="Prepare" Execute="immediate" Return="check" />
+    <CustomAction Id="EdgeShowProvisioningWizard" BinaryRef="EdgeActions" DllEntry="ShowProvisioningWizard" Execute="immediate" Return="check" />
     <CustomAction Id="EdgeRollback" BinaryRef="EdgeActions" DllEntry="Rollback" Execute="rollback" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="EdgeApply" BinaryRef="EdgeActions" DllEntry="Apply" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="EdgeCommit" BinaryRef="EdgeActions" DllEntry="Commit" Execute="commit" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="EdgeUndoUninstall" BinaryRef="EdgeActions" DllEntry="UndoUninstall" Execute="rollback" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="EdgeUninstall" BinaryRef="EdgeActions" DllEntry="Uninstall" Execute="deferred" Impersonate="no" Return="check" HideTarget="yes" />
     <CustomAction Id="EdgeCommitUninstall" BinaryRef="EdgeActions" DllEntry="CommitUninstall" Execute="commit" Impersonate="no" Return="check" HideTarget="yes" />
+    <InstallUISequence>
+      <Custom Action="EdgeShowProvisioningWizard" After="ExecuteAction" Condition="UILevel &gt;= 5 AND NOT REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallUISequence>
     <InstallExecuteSequence>
       <Custom Action="EdgePrepare" After="CostFinalize" Condition="NOT UPGRADINGPRODUCTCODE" />
       <Custom Action="EdgeUndoUninstall" Before="EdgeUninstall" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
@@ -158,7 +173,7 @@ $source=@"
 $wxs=Join-Path $out 'izuma-edge.wxs'
 [IO.File]::WriteAllText($wxs,$source,(New-Object Text.UTF8Encoding($false)))
 $msi=Join-Path $out ($name+'.msi')
-@{version=$manifest.version;msi=$msi;wixSource=$wxs;customAction=$dll;serviceName=$service;upgradeCode=$upgrade;coreSignerThumbprint=$coreSigner;bundleSignerThumbprint=$bundleSigner;qualification=[bool]$AllowUnsigned} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'msi-result.json') -Encoding UTF8
+@{version=$manifest.version;msi=$msi;wixSource=$wxs;customAction=$dll;provisioningWizard=$wizard;serviceName=$service;upgradeCode=$upgrade;coreSignerThumbprint=$coreSigner;bundleSignerThumbprint=$bundleSigner;qualification=[bool]$AllowUnsigned} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'msi-result.json') -Encoding UTF8
 if (-not $PrepareOnly) {
     & $WixCommand build $wxs -arch x64 -ext WixToolset.UI.wixext -out $msi
     if ($LASTEXITCODE -ne 0) { throw 'WiX MSI compilation failed.' }
