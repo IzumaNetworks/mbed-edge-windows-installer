@@ -2,8 +2,11 @@
 
 `windows/build-msi.ps1` packages the existing service deployment into a native
 x64, per-machine WiX MSI. The tray monitor is optional and selected by default;
-`izuma-edge-ctl.exe` is always installed. Software-only installation leaves
-EdgeCore stopped until device provisioning is supplied separately.
+`izuma-edge-ctl.exe` and the portable native `edge-provision.exe` converter are
+always installed. In full desktop UI, a post-install wizard reports an existing
+identity or offers production bundle selection, developer C credential file
+selection, and **Don't provision right now**. Software-only installation leaves
+EdgeCore stopped until device provisioning is supplied.
 
 Download and launch **`izuma-edge-VERSION-windows-x64.msi`**. This one signed MSI
 contains Edge Core, the optional monitor, required CLI and unmodified
@@ -34,8 +37,9 @@ controls first installation. The monitor feature selection also survives upgrade
 Optional first-install provisioning uses `PROVISIONING="C:\path\device.cbor"`
 and `PROVISIONINGMODE=developer` or `production`; the default is `deferred` with
 no provisioning file. Inputs are data, never shell command fragments. Credentials
-are never embedded in the MSI or GitHub artifact. Provisioning an existing
-installation remains the responsibility of the existing first-provisioning helper.
+are never embedded in the MSI or GitHub artifact. Silent and basic-UI installs
+skip the wizard. See [the provisioning flow and headless commands](msi/README.md)
+for developer file conversion, later provisioning, and retained-identity behavior.
 
 ## Installer branding
 

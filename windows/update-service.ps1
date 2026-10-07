@@ -102,6 +102,7 @@ try {
     New-Item -ItemType Directory -Path $release | Out-Null
     Protect-EdgeRelease $release $ServiceName
     Copy-Item -LiteralPath (Join-Path $PackageDirectory 'bin/edge-core.exe') -Destination $release
+    if (Test-Path -LiteralPath (Join-Path $PackageDirectory 'bin/edge-provision.exe')) { Copy-Item -LiteralPath (Join-Path $PackageDirectory 'bin/edge-provision.exe') -Destination $release }
     Get-ChildItem -LiteralPath (Join-Path $PackageDirectory 'bin') -Filter '*.dll' -File | Copy-Item -Destination $release
     foreach ($entry in $manifest.files | Where-Object {$_.path -like 'bin/*'}) {
         if ((Get-FileHash -LiteralPath (Join-Path $release ([IO.Path]::GetFileName($entry.path))) -Algorithm SHA256).Hash -ne $entry.sha256) {
