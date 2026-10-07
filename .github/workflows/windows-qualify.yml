@@ -31,6 +31,12 @@ jobs:
           if ($LASTEXITCODE -ne 0 -or @($jobs.jobs | Where-Object { $_.name -eq 'package' -and $_.conclusion -eq 'success' }).Count -ne 1) { throw 'The signed package job must have succeeded.' }
           gh run download $env:SOURCE_RUN_ID --repo $env:GITHUB_REPOSITORY --name izuma-edge-windows-x64-signed --dir build/release
           if ($LASTEXITCODE -ne 0) { throw 'Signed artifact download failed.' }
+          $artifacts=gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$env:SOURCE_RUN_ID/artifacts" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect qualification fixtures.' }
+          if ($artifacts.artifacts.name -contains 'izuma-edge-synthetic-provisioning-fixture') {
+            gh run download $env:SOURCE_RUN_ID --repo $env:GITHUB_REPOSITORY --name izuma-edge-synthetic-provisioning-fixture --dir build/fixture
+            if ($LASTEXITCODE -ne 0) { throw 'Synthetic fixture download failed.' }
+          }
           $source = Get-Content build/release/source.json -Raw | ConvertFrom-Json
           if ($source.installerCommit -cne $run.head_sha) { throw 'Installer source does not match the selected build.' }
           foreach ($line in Get-Content build/release/SHA256SUMS.txt) {
@@ -47,7 +53,9 @@ jobs:
       - name: Qualify runtime absence, install, repair and reinstall
         run: |
           $source = Get-Content build/qualification-source.json -Raw | ConvertFrom-Json
-          ./test/windows-core/test-msi-release.ps1 -MsiPath $source.msi -CorePackageDirectory $source.core -OutputDirectory build/msi-tests
+          $extra=@{}
+          if (Test-Path build/fixture/provisioning-fixture.c) { $extra.DeveloperFixturePath="$pwd/build/fixture/provisioning-fixture.c" }
+          ./test/windows-core/test-msi-release.ps1 -MsiPath $source.msi -CorePackageDirectory $source.core -OutputDirectory build/msi-tests @extra
       - name: Record qualification source
         if: always()
         env:
