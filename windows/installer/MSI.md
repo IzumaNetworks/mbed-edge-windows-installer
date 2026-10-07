@@ -49,14 +49,17 @@ for developer file conversion, later provisioning, and retained-identity behavio
 
 ## Installer branding
 
-Place these optional files in `windows/installer/branding/` before building.
-The build uses the standard WiX graphics when files are absent.
+The build requires these PNG files in `windows/installer/`, or an explicit
+`-BrandingDirectory`. It validates dimensions and embeds the original files.
+Welcome and finish use separate artwork. PSD source files remain in the repository
+and are not embedded in the MSI. Branding template ZIPs are no longer release assets.
 
 | File | Size | Use |
 | --- | --- | --- |
 | `banner.png` | 493 x 58 pixels | Banner on interior MSI dialogs |
-| `dialog.png` | 493 x 312 pixels | Shared welcome and finish background |
-| `installer.ico` | Include 16, 32, 48 and 256 pixel images | Installer/Programs and Features icon |
+| `welcome.png` | 493 x 312 pixels | Welcome and maintenance background |
+| `finish.png` | 493 x 312 pixels | Successful completion background |
+| `installer.ico` (optional) | Include 16, 32, 48 and 256 pixel images | Installer/Programs and Features icon |
 
 Export backgrounds as opaque PNGs with white text areas. See the
 [WiX UI graphics specification](https://docs.firegiant.com/wix/tools/wixext/wixui/).

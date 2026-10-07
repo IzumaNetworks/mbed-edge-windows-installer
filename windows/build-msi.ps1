@@ -12,7 +12,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if (-not $BrandingDirectory) { $BrandingDirectory=Join-Path $PSScriptRoot 'installer/branding' }
+if (-not $BrandingDirectory) { $BrandingDirectory=Join-Path $PSScriptRoot 'installer' }
 . (Join-Path $PSScriptRoot 'package-tools.ps1')
 $bundle=(Resolve-Path -LiteralPath $BundleDirectory).Path
 . (Join-Path $bundle 'scripts/bundle-tools.ps1')
@@ -89,11 +89,25 @@ $license=Get-Content -LiteralPath (Join-Path $bundle 'core/licenses/edge.txt') -
 $rtf='{\rtf1\ansi '+$license.Replace('\','\\').Replace('{','\{').Replace('}','\}').Replace("`r",'').Replace("`n",'\par ')+'}'
 $licensePath=Join-Path $out 'license.rtf'
 [IO.File]::WriteAllText($licensePath,$rtf,[Text.Encoding]::ASCII)
-$brandingXml=@()
-foreach ($entry in @(@('banner.png','WixUIBannerBmp'),@('dialog.png','WixUIDialogBmp'))) {
-    $asset=Join-Path $BrandingDirectory $entry[0]
-    if (Test-Path -LiteralPath $asset) { $brandingXml+='<WixVariable Id="'+$entry[1]+'" Value="'+(X ([IO.Path]::GetFullPath($asset)))+'" />' }
+# Keep the supplied PNGs unchanged. Windows 10+ MSI bitmap controls support PNG.
+# Separate dialog artwork uses the overridable WiX UI localization resource IDs.
+Add-Type -AssemblyName System.Drawing
+$brandingXml=@(); $brandingAssets=@()
+foreach ($entry in @(@('banner.png',493,58,'WixUI_Bmp_Banner'),@('welcome.png',493,312,'WixUI_Bmp_Dialog'),@('finish.png',493,312,'EdgeFinishBmp'))) {
+    $asset=(Resolve-Path -LiteralPath (Join-Path $BrandingDirectory $entry[0])).Path
+    $file=Get-Item -LiteralPath $asset
+    if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Branding must be regular PNG files.' }
+    $image=[Drawing.Image]::FromFile($asset)
+    try {
+        if ($image.Width -ne $entry[1] -or $image.Height -ne $entry[2] -or $image.RawFormat.Guid -ne [Drawing.Imaging.ImageFormat]::Png.Guid) { throw "Invalid installer artwork: $($entry[0]); expected PNG $($entry[1]) x $($entry[2])." }
+    } finally { $image.Dispose() }
+    $brandingAssets+=@{name=$entry[0];path=$asset;binary=$entry[3];width=$entry[1];height=$entry[2];sha256=(Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()}
 }
+$brandingXml+='<WixVariable Id="WixUIBannerBmp" Value="'+(X $brandingAssets[0].path)+'" />'
+$brandingXml+='<WixVariable Id="WixUIDialogBmp" Value="'+(X $brandingAssets[1].path)+'" />'
+$brandingXml+='<Binary Id="EdgeFinishBmp" SourceFile="'+(X $brandingAssets[2].path)+'" />'
+$localization=Join-Path $out 'branding.wxl'
+[IO.File]::WriteAllText($localization,'<WixLocalization Culture="en-US" xmlns="http://wixtoolset.org/schemas/v4/wxl"><String Id="ExitDialogBitmap" Value="EdgeFinishBmp" /></WixLocalization>',[Text.UTF8Encoding]::new($false))
 $icon=Join-Path $BrandingDirectory 'installer.ico'
 if (Test-Path -LiteralPath $icon) { $brandingXml+='<Icon Id="InstallerIcon" SourceFile="'+(X ([IO.Path]::GetFullPath($icon)))+'" /><Property Id="ARPPRODUCTICON" Value="InstallerIcon" />' }
 $source=@"
@@ -176,9 +190,9 @@ $source=@"
 $wxs=Join-Path $out 'izuma-edge.wxs'
 [IO.File]::WriteAllText($wxs,$source,(New-Object Text.UTF8Encoding($false)))
 $msi=Join-Path $out ($name+'.msi')
-@{version=$manifest.version;msi=$msi;wixSource=$wxs;customAction=$dll;provisioningWizard=$wizard;serviceName=$service;upgradeCode=$upgrade;coreSignerThumbprint=$coreSigner;bundleSignerThumbprint=$bundleSigner;qualification=[bool]$AllowUnsigned} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'msi-result.json') -Encoding UTF8
+@{version=$manifest.version;msi=$msi;wixSource=$wxs;customAction=$dll;provisioningWizard=$wizard;serviceName=$service;upgradeCode=$upgrade;coreSignerThumbprint=$coreSigner;bundleSignerThumbprint=$bundleSigner;qualification=[bool]$AllowUnsigned;localization=$localization;branding=$brandingAssets} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'msi-result.json') -Encoding UTF8
 if (-not $PrepareOnly) {
-    & $WixCommand build $wxs -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -out $msi
+    & $WixCommand build $wxs -arch x64 -ext WixToolset.UI.wixext -ext WixToolset.Util.wixext -loc $localization -out $msi
     if ($LASTEXITCODE -ne 0) { throw 'WiX MSI compilation failed.' }
     Write-Output "Built unsigned qualification MSI: $msi"
 } else { Write-Output "Prepared $wxs. Sign $dll before WiX compilation; sign the MSI after compilation." }
