@@ -29,6 +29,23 @@ function Msi([string]$Action,[string]$Case) {
     $process=Start-Process "$env:SystemRoot/System32/msiexec.exe" -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
     try { if ($process.ExitCode -notin @(0,3010)) { throw "$Case failed ($($process.ExitCode)); inspect the MSI log." } } finally { $process.Dispose() }
 }
+function Converter([string]$InputFile,[string]$OutputFile,[string]$LogName) {
+    # Capture stderr as data; PS 5.1 must not turn an expected rejection into
+    # a terminating NativeCommandError before its exit code can be checked.
+    $info=New-Object Diagnostics.ProcessStartInfo
+    $info.FileName=$converter
+    $info.Arguments=ConvertTo-EdgeNativeArguments @('convert-developer','--input',$InputFile,'--output',$OutputFile)
+    $info.UseShellExecute=$false; $info.CreateNoWindow=$true
+    $info.RedirectStandardOutput=$true; $info.RedirectStandardError=$true
+    $process=New-Object Diagnostics.Process; $process.StartInfo=$info
+    try {
+        [void]$process.Start()
+        $stdout=$process.StandardOutput.ReadToEnd(); $stderr=$process.StandardError.ReadToEnd(); $process.WaitForExit()
+        [IO.File]::WriteAllText((Join-Path $out $LogName),($stdout+$stderr))
+        return $process.ExitCode
+    } finally { $process.Dispose() }
+}
+
 function Runtime-Detected {
     $runtime=Get-ItemProperty -LiteralPath $runtimeKey -ErrorAction SilentlyContinue
     return [bool]($runtime -and $runtime.PSObject.Properties['Installed'] -and $runtime.Installed)
@@ -90,14 +107,14 @@ public static class ReleaseRuntimeState {
     $converter=Join-Path $release.directory 'edge-provision.exe'
     Check ((Test-Path -LiteralPath $converter) -and (Get-AuthenticodeSignature -LiteralPath $converter).Status -eq 'Valid') 'MSI deploys the signed portable native converter with its private runtime'
     if ($DeveloperFixturePath) {
-        $input=Join-Path $out 'arbitrary developer filename café.c'
+        $input=Join-Path $out ('arbitrary developer filename caf'+[char]0x00e9+'.c')
         Copy-Item -LiteralPath $DeveloperFixturePath -Destination $input
         $bundle=Join-Path $out 'synthetic.cbor'
-        & $converter convert-developer --input $input --output $bundle *> (Join-Path $out 'converter.log')
-        Check ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $bundle)) 'Installed native converter accepts an arbitrary Unicode developer credential filename'
+        $exit=Converter $input $bundle 'converter.log'
+        Check ($exit -eq 0 -and (Test-Path -LiteralPath $bundle)) 'Installed native converter accepts an arbitrary Unicode developer credential filename'
         $bundleHash=(Get-FileHash -LiteralPath $bundle).Hash
-        & $converter convert-developer --input $input --output $bundle *> (Join-Path $out 'converter-overwrite.log')
-        Check ($LASTEXITCODE -ne 0 -and (Get-FileHash -LiteralPath $bundle).Hash -eq $bundleHash) 'Native conversion refuses to overwrite an existing bundle'
+        $exit=Converter $input $bundle 'converter-overwrite.log'
+        Check ($exit -ne 0 -and (Get-FileHash -LiteralPath $bundle).Hash -eq $bundleHash) 'Native conversion refuses to overwrite an existing bundle'
         $acl=Get-Acl -LiteralPath $bundle
         Check ($acl.AreAccessRulesProtected -and -not ($acl.Access | Where-Object {$_.IdentityReference.Value -match 'Users$|Everyone|Authenticated Users'})) 'Converted private key material has a protected private ACL'
         $bad=Join-Path $out 'malformed.c'; 'This is not a credential file' | Set-Content -LiteralPath $bad
