@@ -251,6 +251,12 @@ mandatory for unsigned MSIs; it separates service names, installation roots,
 product names and upgrade families from production. Build two increasing
 versions with the same GUID, then run elevated:
 
+The monitor and CLI must use that same isolated service identity. Build them
+with `edge-core-monitor/windows/build.ps1 -QualificationServiceName EdgeCoreMonitorTest-GUID`,
+and pass `-ExpectedServiceName EdgeCoreMonitorTest-GUID` to bundle preparation.
+The full `windows/build-local.ps1` helper supplies these consistently from
+`-QualificationId`. Packaging rejects mismatched or unverified bindings.
+
 ```powershell
 .\test\windows-core\test-msi.ps1 -InitialResult C:\qualification\initial\msi-result.json -UpgradeResult C:\qualification\upgrade\msi-result.json -OutputDirectory C:\qualification\results
 ```
