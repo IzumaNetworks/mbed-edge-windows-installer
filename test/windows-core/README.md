@@ -9,6 +9,11 @@ GUID so they cannot change the primary EdgeCore service.
 - `test-msi-release.ps1` qualifies the actual signed single MSI after removing the shared x64 release runtime on a disposable GitHub-hosted runner. It verifies private DLL loading, repair, uninstall and reinstall with retained state.
 - `test-installer-bundle.ps1` and `test-package.ps1` validate payload integrity
   and reject tampering and unsigned production catalogs.
+- `test-unified-msi.ps1` reads the compiled MSI and verifies a single delivery
+  artifact and product version containing Core, converter, monitor, CLI, wizard
+  and runtime DLLs. It queries the packaged CLI read-only and matches its compiled
+  service identity to the bundle, MSI and delivery manifest. `-RequireBothToolchains` also checks that the same delivery
+  result records successful 2022 and 2026 compiler validation. It does not install.
 - `test-provisioning-input.ps1` validates credential-free CBOR/JSON staging
   inputs; `test-ctl-path.ps1` validates owned PATH changes without changing the
   machine. `test-release-orchestration.ps1` uses a local GitHub CLI fixture.

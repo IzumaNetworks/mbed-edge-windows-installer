@@ -12,8 +12,10 @@ function Get-EdgeVisualCppRuntimeDirectory([string]$Directory) {
     if ($LASTEXITCODE -ne 0 -or -not $visualStudio) { throw 'Specify the Visual Studio x64 redistributable runtime directory.' }
     $candidates=@(Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Redist/MSVC') -Directory | Where-Object Name -match '^\d+\.\d+\.\d+$' | Sort-Object { [version]$_.Name } -Descending)
     foreach ($candidate in $candidates) {
-        $path=Join-Path $candidate.FullName 'x64/Microsoft.VC143.CRT'
-        if (Test-Path -LiteralPath $path) { return Get-EdgeLocalDirectory $path }
+        foreach ($toolset in @('VC145','VC143')) {
+            $path=Join-Path $candidate.FullName ("x64/Microsoft.$toolset.CRT")
+            if (Test-Path -LiteralPath $path) { return Get-EdgeLocalDirectory $path }
+        }
     }
     throw 'The build host has no Visual Studio x64 redistributable CRT DLLs.'
 }

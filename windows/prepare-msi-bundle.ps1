@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [string]$MonitorExecutable,
     [string]$ControlExecutable,
+    [ValidatePattern('^(EdgeCore|EdgeCoreMonitorTest-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$')]
+    [string]$ExpectedServiceName='EdgeCore',
     [switch]$AllowUnsigned,
     [string]$SignerThumbprint
 )
@@ -22,6 +24,26 @@ Assert-EdgeNativeImage $exe
 if (-not $ControlExecutable) { $ControlExecutable=Join-Path $monitor 'build/bin/Release/izuma-edge-ctl.exe' }
 $ctl=(Resolve-Path -LiteralPath $ControlExecutable).Path
 Assert-EdgeNativeImage $ctl
+# The CLI and GUI share monitor-core's compiled service binding. Query only;
+# a missing/stopped service on the build host is valid for this metadata check.
+$processInfo=New-Object Diagnostics.ProcessStartInfo
+$processInfo.FileName=$ctl; $processInfo.Arguments='status --json'
+$processInfo.UseShellExecute=$false; $processInfo.CreateNoWindow=$true
+$processInfo.RedirectStandardOutput=$true; $processInfo.RedirectStandardError=$true
+$controlProcess=New-Object Diagnostics.Process
+$controlProcess.StartInfo=$processInfo
+try {
+    [void]$controlProcess.Start()
+    $controlOutput=$controlProcess.StandardOutput.ReadToEndAsync()
+    $controlErrors=$controlProcess.StandardError.ReadToEndAsync()
+    if (-not $controlProcess.WaitForExit(15000)) {
+        $controlProcess.Kill(); throw 'Control helper service-binding query timed out.'
+    }
+    $controlStatus=$controlOutput.Result | ConvertFrom-Json
+    if (-not $controlStatus -or $controlStatus.service -ne $ExpectedServiceName) {
+        throw "Monitor/CLI service binding differs from the installer target $ExpectedServiceName. Rebuild the monitor for this service."
+    }
+} finally { $controlProcess.Dispose() }
 $out=Get-EdgeLocalDirectory ([IO.Path]::GetFullPath($OutputDirectory))
 if (Test-Path -LiteralPath $out) { throw 'OutputDirectory must be new.' }
 $bundle=Join-Path $out 'bundle'
@@ -39,7 +61,7 @@ foreach ($name in @('package-tools.ps1','visual-cpp-tools.ps1','service-tools.ps
     # Maintenance uses this checkout's helpers; validate all of them in the bundle.
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $bundle 'scripts')
 }
-$metadata=[ordered]@{schema=1; product='Izuma Edge'; version=$manifest.version; architecture='x64'; monitorVersion='0.1.0'; files=@()}
+$metadata=[ordered]@{schema=1; product='Izuma Edge'; version=$manifest.version; architecture='x64'; monitorVersion='0.1.0'; serviceName=$ExpectedServiceName; files=@()}
 foreach ($file in Get-ChildItem -LiteralPath $bundle -Recurse -File | Sort-Object FullName) {
     $metadata.files+=@{path=$file.FullName.Substring($bundle.Length+1).Replace('\','/'); bytes=$file.Length; sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 }

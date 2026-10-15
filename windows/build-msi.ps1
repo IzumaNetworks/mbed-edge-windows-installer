@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [string]$WixCommand='wix',
     [string]$CMakePath='cmake',
+    [ValidateSet('Auto','Visual Studio 17 2022','Visual Studio 18 2026')]
+    [string]$CMakeGenerator='Auto',
     [string]$BrandingDirectory,
     [switch]$AllowUnsigned,
     [switch]$PrepareOnly,
@@ -12,6 +14,12 @@ param(
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
+if ($CMakeGenerator -eq 'Auto') {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+    $vsVersion = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -version '[17.0,19.0)' -property installationVersion
+    if (-not $vsVersion) { throw 'Install Visual Studio 2022 or 2026 C++ Build Tools.' }
+    $CMakeGenerator = if (([version]$vsVersion).Major -eq 18) { 'Visual Studio 18 2026' } else { 'Visual Studio 17 2022' }
+}
 if (-not $BrandingDirectory) { $BrandingDirectory=Join-Path $PSScriptRoot 'installer' }
 . (Join-Path $PSScriptRoot 'package-tools.ps1')
 $bundle=(Resolve-Path -LiteralPath $BundleDirectory).Path
@@ -41,6 +49,11 @@ if ($QualificationId) {
     $suffix='-qualification-'+$QualificationId; $family+='.'+$QualificationId
     $product+=' qualification '+$QualificationId
 }
+if ($manifest.PSObject.Properties['serviceName']) {
+    if ($manifest.serviceName -ne $service) { throw 'Bundle monitor/CLI service binding differs from the MSI service name.' }
+} elseif ($service -ne 'EdgeCore') {
+    throw 'Qualification MSI requires a bundle whose monitor/CLI service binding has been verified.'
+}
 if (-not (Test-Path -LiteralPath (Join-Path $bundle 'core/bin/edge-provision.exe') -PathType Leaf)) { throw 'The MSI requires a Core package containing the native developer converter.' }
 New-Item -ItemType Directory -Path $out | Out-Null
 function Id {
@@ -57,7 +70,7 @@ function Invoke-CMake {
     if ($LASTEXITCODE -ne 0) { throw 'MSI custom action compilation failed.' }
 }
 $native=Join-Path $out 'native'
-Invoke-CMake @('-S',(Join-Path $PSScriptRoot 'installer/msi'),'-B',$native,'-G','Visual Studio 17 2022','-A','x64',"-DEDGE_SERVICE_NAME=$service","-DEDGE_FOLDER_SUFFIX=$suffix","-DEDGE_VERSION=$($manifest.version)","-DEDGE_UNSIGNED=$([int][bool]$AllowUnsigned)","-DEDGE_CORE_SIGNER=$coreSigner","-DEDGE_BUNDLE_SIGNER=$bundleSigner")
+Invoke-CMake @('-S',(Join-Path $PSScriptRoot 'installer/msi'),'-B',$native,'-G',$CMakeGenerator,'-A','x64',"-DEDGE_SERVICE_NAME=$service","-DEDGE_FOLDER_SUFFIX=$suffix","-DEDGE_VERSION=$($manifest.version)","-DEDGE_UNSIGNED=$([int][bool]$AllowUnsigned)","-DEDGE_CORE_SIGNER=$coreSigner","-DEDGE_BUNDLE_SIGNER=$bundleSigner")
 Invoke-CMake @('--build',$native,'--config','Release','--parallel','2')
 $dll=Join-Path $native 'Release/edge_msi_actions.dll'
 $wizard=Join-Path $native 'Release/edge-provisioning-wizard.exe'
