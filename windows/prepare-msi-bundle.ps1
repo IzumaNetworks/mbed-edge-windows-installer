@@ -21,6 +21,7 @@ $monitor=(Resolve-Path -LiteralPath $MonitorRepositoryDirectory).Path
 if (-not $MonitorExecutable) { $MonitorExecutable=Join-Path $monitor 'build/bin/Release/edge-core-monitor.exe' }
 $exe=(Resolve-Path -LiteralPath $MonitorExecutable).Path
 Assert-EdgeNativeImage $exe
+$monitorVersion=[version](Get-Item -LiteralPath $exe).VersionInfo.FileVersion
 if (-not $ControlExecutable) { $ControlExecutable=Join-Path $monitor 'build/bin/Release/izuma-edge-ctl.exe' }
 $ctl=(Resolve-Path -LiteralPath $ControlExecutable).Path
 Assert-EdgeNativeImage $ctl
@@ -61,7 +62,7 @@ foreach ($name in @('package-tools.ps1','visual-cpp-tools.ps1','service-tools.ps
     # Maintenance uses this checkout's helpers; validate all of them in the bundle.
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $bundle 'scripts')
 }
-$metadata=[ordered]@{schema=1; product='Izuma Edge'; version=$manifest.version; architecture='x64'; monitorVersion='0.1.0'; serviceName=$ExpectedServiceName; files=@()}
+$metadata=[ordered]@{schema=1; product='Izuma Edge'; version=$manifest.version; architecture='x64'; monitorVersion=$monitorVersion.ToString(); serviceName=$ExpectedServiceName; files=@()}
 foreach ($file in Get-ChildItem -LiteralPath $bundle -Recurse -File | Sort-Object FullName) {
     $metadata.files+=@{path=$file.FullName.Substring($bundle.Length+1).Replace('\','/'); bytes=$file.Length; sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 }
