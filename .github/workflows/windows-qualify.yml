@@ -15,7 +15,7 @@ permissions:
   actions: read
 jobs:
   qualify:
-    runs-on: windows-2022
+    runs-on: [self-hosted, Windows, X64, windows-2022]
     environment: windows-signing
     defaults:
       run:
