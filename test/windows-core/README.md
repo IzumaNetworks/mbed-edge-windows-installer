@@ -6,7 +6,7 @@ GUID so they cannot change the primary EdgeCore service.
 
 - `test-msi.ps1` tests restricted LocalService, required CLI, failed-upgrade
   rollback, major upgrade, downgrade rejection, uninstall and retained state.
-- `test-msi-release.ps1` qualifies the actual signed single MSI after removing the shared x64 release runtime on a disposable GitHub-hosted runner. It verifies private DLL loading, repair, uninstall and reinstall with retained state.
+- `test-msi-release.ps1` qualifies the actual signed single MSI after removing the shared x64 release runtime on a disposable self-hosted Windows runner. The VM image must have the machine environment setting `IZUMA_EDGE_MSI_DISPOSABLE=1`; see [runner requirements](../../.github/SELF_HOSTED_RUNNERS.md). It verifies private DLL loading, repair, uninstall and reinstall with retained state.
 - `test-installer-bundle.ps1` and `test-package.ps1` validate payload integrity
   and reject tampering and unsigned production catalogs.
 - `test-unified-msi.ps1` reads the compiled MSI and verifies a single delivery

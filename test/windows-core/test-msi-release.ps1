@@ -9,7 +9,10 @@ param(
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Production MSI qualification and shared-runtime removal require a disposable GitHub-hosted runner.' }
+if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'self-hosted') { throw 'Production MSI qualification requires a disposable self-hosted GitHub Actions runner.' }
+# Read the machine setting rather than a workflow-provided environment variable.
+# The runner image owner must explicitly mark this VM for destructive tests.
+if ([Environment]::GetEnvironmentVariable('IZUMA_EDGE_MSI_DISPOSABLE','Machine') -ne '1') { throw 'Shared-runtime removal requires a disposable runner image marked with machine setting IZUMA_EDGE_MSI_DISPOSABLE=1.' }
 . (Join-Path $PSScriptRoot '../../windows/package-tools.ps1')
 Assert-EdgeAdministrator
 if (Get-Service EdgeCore -ErrorAction SilentlyContinue) { throw 'Runner must not have an EdgeCore service.' }

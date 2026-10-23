@@ -167,8 +167,9 @@ and [GitHub OIDC connection](https://learn.microsoft.com/en-us/azure/developer/g
 `windows/build-release.ps1` is the single entry point for the complete build.
 It waits for the workflows to succeed and downloads the final signed artifacts.
 Use `-BuildCoreInInstaller` to build everything in the installer's single manual
-workflow. Builds and signing run on GitHub's Windows runners;
-your local machine needs an authenticated `gh` CLI and Windows PowerShell 5.1+.
+workflow. Builds and signing run only on self-hosted Windows runners; see the
+[self-hosted runner requirements](../../.github/SELF_HOSTED_RUNNERS.md).
+Your local machine needs an authenticated `gh` CLI and Windows PowerShell 5.1+.
 
 ```powershell
 .\windows\build-release.ps1 -Version RELEASE_VERSION -CoreRef CORE_RELEASE_BRANCH -InstallerRef INSTALLER_RELEASE_BRANCH -MonitorRef MONITOR_COMMIT -BuildCoreInInstaller -OutputDirectory C:\releases\izuma-edge-RELEASE_VERSION
