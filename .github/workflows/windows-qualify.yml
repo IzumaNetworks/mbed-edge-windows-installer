@@ -15,7 +15,7 @@ permissions:
   actions: read
 jobs:
   qualify:
-    runs-on: windows-2022
+    runs-on: [self-hosted, Windows, X64, edge-msi-disposable]
     environment: windows-signing
     defaults:
       run:
@@ -71,7 +71,7 @@ jobs:
           path: |
             build/core-source/build/openssl/install
             build/core-source/build/openssl/openssl-3.5.9/LICENSE.txt
-          key: windows-2022-openssl-3.5.9-${{ env.VCToolsVersion }}-${{ hashFiles('build/core-source/windows/build-openssl.ps1') }}
+          key: self-hosted-windows-x64-openssl-3.5.9-${{ env.VCToolsVersion }}-${{ hashFiles('build/core-source/windows/build-openssl.ps1') }}
       - name: Build fixture OpenSSL SDK if needed
         if: inputs.fixture_ref != '' && steps.fixture-openssl.outputs.cache-hit != 'true'
         working-directory: build/core-source

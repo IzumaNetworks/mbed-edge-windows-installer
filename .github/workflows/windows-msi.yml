@@ -34,8 +34,12 @@ jobs:
     if: inputs.core_run_id == ''
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.os }}
+        include:
+          - os: Linux
+            arch: X64
+          - os: macOS
+            arch: ARM64
+    runs-on: [self-hosted, "${{ matrix.os }}", "${{ matrix.arch }}"]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +56,7 @@ jobs:
           cmake --build build/provision --parallel 2
           ctest --test-dir build/provision --output-on-failure
   package:
-    runs-on: windows-2022
+    runs-on: [self-hosted, Windows, X64, edge-windows-build]
     outputs:
       version: ${{ steps.source.outputs.version }}
     environment: windows-signing
@@ -167,7 +171,7 @@ jobs:
           path: |
             build/core-source/build/openssl/install
             build/core-source/build/openssl/openssl-3.5.9/LICENSE.txt
-          key: windows-2022-openssl-3.5.9-${{ env.VCToolsVersion }}-${{ hashFiles('build/core-source/windows/build-openssl.ps1') }}
+          key: self-hosted-windows-x64-openssl-3.5.9-${{ env.VCToolsVersion }}-${{ hashFiles('build/core-source/windows/build-openssl.ps1') }}
       - name: Build pinned OpenSSL SDK
         if: inputs.core_run_id == '' && steps.openssl-cache.outputs.cache-hit != 'true'
         working-directory: build/core-source
@@ -355,7 +359,7 @@ jobs:
   qualify-msi:
     needs: [package, portable-converter]
     if: always() && needs.package.result == 'success' && (needs.portable-converter.result == 'success' || needs.portable-converter.result == 'skipped')
-    runs-on: windows-2022
+    runs-on: [self-hosted, Windows, X64, edge-msi-disposable]
     defaults:
       run:
         shell: powershell
